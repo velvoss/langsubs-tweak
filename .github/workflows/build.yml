@@ -5,6 +5,6 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: ./build.sh
+      - run: sh build.sh
       - uses: actions/upload-artifact@v4
         with: { name: LangSubsTap, path: LangSubsTap.dylib }

@@ -2245,7 +2245,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
     _button.center = CGPointMake(cx, cy);
 }
 - (void)panned:(UIPanGestureRecognizer *)g {
-    UIWindow *w = _button.superview;
+    UIView *w = _button.superview;
     if (!w) return;
     CGPoint t = [g translationInView:w];
     CGPoint c = _button.center;

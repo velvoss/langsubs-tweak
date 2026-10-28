@@ -475,6 +475,43 @@ static NSRegularExpression *WordRE, *ArabicRE;
 }
 @end
 
+// ---- open settings from Nuvio's own Settings page (Kotlin posts "LangSubsTapOpenSettings") ----
+static void LSOpenSettingsStandalone(void) {
+    if ([LSController shared].overlay) { [[LSController shared] openSettings]; return; }   // in player: pauses the video
+    UIWindow *w = nil;
+    for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) {
+        if (![sc isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *x in ((UIWindowScene *)sc).windows) if (x.isKeyWindow) w = x;
+    }
+    if (!w) return;
+    LSSettingsVC *s = [LSSettingsVC new];
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:s];
+    nav.modalPresentationStyle = UIModalPresentationPageSheet;
+    nav.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    [LSTop(w) presentViewController:nav animated:YES completion:nil];
+}
+
+// ---- 3-finger long-press anywhere in the app opens Lang Subs Tap settings ----
+@interface LSGesture : NSObject
++ (void)fire:(UILongPressGestureRecognizer *)g;
+@end
+@implementation LSGesture
++ (void)fire:(UILongPressGestureRecognizer *)g { if (g.state == UIGestureRecognizerStateBegan) LSOpenSettingsStandalone(); }
+@end
+static void LSInstallGesture(void) {
+    static char key;
+    for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) {
+        if (![sc isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *w in ((UIWindowScene *)sc).windows) {
+            if (objc_getAssociatedObject(w, &key)) continue;
+            UILongPressGestureRecognizer *g = [[UILongPressGestureRecognizer alloc] initWithTarget:[LSGesture class] action:@selector(fire:)];
+            g.numberOfTouchesRequired = 3; g.minimumPressDuration = 0.7;
+            g.cancelsTouchesInView = NO; g.delaysTouchesBegan = NO; g.delaysTouchesEnded = NO;
+            [w addGestureRecognizer:g]; objc_setAssociatedObject(w, &key, g, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+    }
+}
+
 // ================= install: swizzle MPVPlayerViewController lifecycle =================
 static IMP origAppear, origDisappear;
 static void newAppear(id self, SEL _cmd, BOOL a) { ((void (*)(id, SEL, BOOL))origAppear)(self, _cmd, a); [[LSController shared] attach:self]; }
@@ -496,5 +533,6 @@ static void LSInstall(void) {
 __attribute__((constructor)) static void LSInit(void) {
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *x) {
         static dispatch_once_t o; dispatch_once(&o, ^{ LSInstall(); });
+        LSInstallGesture();
     }];
 }

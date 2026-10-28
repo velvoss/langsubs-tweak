@@ -1,5 +1,5 @@
-// LangSubsTap — tap a word in the subtitle → translation card (Lang Subs server).
-// Plain ObjC runtime, no Substrate. Inject the dylib into the Nuvio IPA.
+// LangSubsTap (standalone) — tap any word in ANY subtitle → translation card.
+// No server needed. Plain ObjC runtime, no Substrate. Inject the dylib into the Nuvio IPA.
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <dlfcn.h>
@@ -30,23 +30,33 @@ static mpv_handle *LSHandle(id vc) {
     if (!iv) return NULL;
     return *(mpv_handle **)((uint8_t *)(__bridge void *)vc + ivar_getOffset(iv));
 }
-static UIColor *LSHex(NSString *h, UIColor *fb) {
-    if (![h hasPrefix:@"#"] || h.length != 7) return fb;
-    unsigned v = 0; [[NSScanner scannerWithString:[h substringFromIndex:1]] scanHexInt:&v];
-    return [UIColor colorWithRed:((v >> 16) & 255) / 255.0 green:((v >> 8) & 255) / 255.0 blue:(v & 255) / 255.0 alpha:1];
-}
-static void LSReq(NSString *url, NSString *method, NSDictionary *body, void (^cb)(id)) {
-    NSURL *u = [NSURL URLWithString:url]; if (!u) return;
-    NSMutableURLRequest *r = [NSMutableURLRequest requestWithURL:u];
-    r.HTTPMethod = method; r.timeoutInterval = 5;
-    if (body) {
-        r.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
-        [r setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    }
-    [[NSURLSession.sharedSession dataTaskWithRequest:r completionHandler:^(NSData *d, NSURLResponse *u2, NSError *e) {
-        id j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
-        if (cb) dispatch_async(dispatch_get_main_queue(), ^{ cb(j); });
+
+// ---- translation (device → public API, no own server) ----
+static NSString *LSLang(void) { return [NSUserDefaults.standardUserDefaults stringForKey:@"LSTargetLang"] ?: @"ar"; }
+static void LSGet(NSString *url, void (^cb)(NSData *)) {
+    NSURL *u = [NSURL URLWithString:url]; if (!u) { cb(nil); return; }
+    NSMutableURLRequest *r = [NSMutableURLRequest requestWithURL:u]; r.timeoutInterval = 6;
+    [[NSURLSession.sharedSession dataTaskWithRequest:r completionHandler:^(NSData *d, NSURLResponse *x, NSError *e) {
+        dispatch_async(dispatch_get_main_queue(), ^{ cb(d); });
     }] resume];
+}
+static void LSTranslate(NSString *text, void (^cb)(NSString *)) {
+    NSString *q = [text stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLQueryAllowedCharacterSet];
+    NSString *u = [NSString stringWithFormat:@"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=%@&dt=t&q=%@", LSLang(), q];
+    LSGet(u, ^(NSData *d) {
+        id j = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+        NSMutableString *s = [NSMutableString new];
+        if ([j isKindOfClass:NSArray.class] && [j count] && [j[0] isKindOfClass:NSArray.class])
+            for (id seg in j[0]) if ([seg isKindOfClass:NSArray.class] && [seg count] && [seg[0] isKindOfClass:NSString.class]) [s appendString:seg[0]];
+        if (s.length) { cb(s); return; }
+        NSString *u2 = [NSString stringWithFormat:@"https://api.mymemory.translated.net/get?q=%@&langpair=Autodetect|%@", q, LSLang()];
+        LSGet(u2, ^(NSData *d2) {
+            id j2 = d2 ? [NSJSONSerialization JSONObjectWithData:d2 options:0 error:nil] : nil;
+            id rd = [j2 isKindOfClass:NSDictionary.class] ? j2[@"responseData"] : nil;
+            NSString *m = [rd isKindOfClass:NSDictionary.class] ? rd[@"translatedText"] : nil;
+            cb([m isKindOfClass:NSString.class] && m.length ? m : nil);
+        });
+    });
 }
 
 @interface LSOverlay : UIView
@@ -60,11 +70,9 @@ static void LSReq(NSString *url, NSString *method, NSDictionary *body, void (^cb
 @interface LSController : NSObject
 @property (weak) UIViewController *vc;
 @property LSOverlay *overlay; @property UITextView *tv; @property UIView *card;
-@property UILabel *wordL, *meaningL; @property NSTimer *timer;
-@property NSString *base, *lastText, *curWord;
-@property NSDictionary *words, *colors;
+@property UILabel *wordL, *meaningL, *sentL; @property NSTimer *timer;
+@property NSString *lastText, *curWord; @property NSMutableDictionary *words;
 @property BOOL hidSubs, pausedByUs; @property NSInteger ticks;
-@property CFTimeInterval lastPos, lastWords;
 + (instancetype)shared;
 - (void)attach:(UIViewController *)vc; - (void)detach;
 @end
@@ -73,7 +81,6 @@ static NSRegularExpression *WordRE, *ArabicRE;
 
 @implementation LSController
 + (instancetype)shared { static LSController *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [LSController new]; }); return s; }
-
 - (BOOL)isArabic:(NSString *)s { return [ArabicRE firstMatchInString:s options:0 range:NSMakeRange(0, s.length)] != nil; }
 
 - (void)attach:(UIViewController *)vc {
@@ -83,7 +90,8 @@ static NSRegularExpression *WordRE, *ArabicRE;
         WordRE = [NSRegularExpression regularExpressionWithPattern:@"[\\p{L}\\p{M}][\\p{L}\\p{M}'’-]*" options:0 error:nil];
         ArabicRE = [NSRegularExpression regularExpressionWithPattern:@"\\p{Arabic}" options:0 error:nil];
     }
-    self.vc = vc; self.words = @{}; self.colors = @{}; self.lastText = nil;
+    self.vc = vc; self.lastText = nil;
+    self.words = [([NSUserDefaults.standardUserDefaults dictionaryForKey:@"LSWords"] ?: @{}) mutableCopy];
     LSOverlay *o = [[LSOverlay alloc] initWithFrame:vc.view.bounds];
     o.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     __weak LSController *w = self; o.onLayout = ^{ [w layout]; };
@@ -98,8 +106,9 @@ static NSRegularExpression *WordRE, *ArabicRE;
     c.backgroundColor = [UIColor colorWithRed:0.09 green:0.16 blue:0.19 alpha:0.97];
     c.layer.cornerRadius = 14; c.hidden = YES;
     UILabel *wl = [UILabel new]; wl.font = [UIFont boldSystemFontOfSize:24]; wl.textColor = UIColor.whiteColor;
-    UILabel *ml = [UILabel new]; ml.font = [UIFont systemFontOfSize:20]; ml.textColor = [UIColor colorWithWhite:0.9 alpha:1]; ml.numberOfLines = 2;
-    [c addSubview:wl]; [c addSubview:ml];
+    UILabel *ml = [UILabel new]; ml.font = [UIFont systemFontOfSize:20]; ml.textColor = [UIColor colorWithWhite:0.92 alpha:1]; ml.numberOfLines = 2;
+    UILabel *sl = [UILabel new]; sl.font = [UIFont systemFontOfSize:15]; sl.textColor = [UIColor colorWithWhite:0.65 alpha:1]; sl.numberOfLines = 2;
+    [c addSubview:wl]; [c addSubview:ml]; [c addSubview:sl];
     NSArray *titles = @[@"أتعلمها", @"أعرفها", @"إغلاق"]; NSArray *sels = @[@"onLearning", @"onKnown", @"closeCard"];
     for (NSUInteger i = 0; i < 3; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -108,18 +117,20 @@ static NSRegularExpression *WordRE, *ArabicRE;
         [b addTarget:self action:NSSelectorFromString(sels[i]) forControlEvents:UIControlEventTouchUpInside];
         [c addSubview:b];
     }
-    [o addSubview:c];
-    [vc.view addSubview:o];
-    self.overlay = o; self.tv = tv; self.card = c; self.wordL = wl; self.meaningL = ml;
+    [o addSubview:c]; [vc.view addSubview:o];
+    self.overlay = o; self.tv = tv; self.card = c; self.wordL = wl; self.meaningL = ml; self.sentL = sl;
     self.timer = [NSTimer scheduledTimerWithTimeInterval:0.2 target:self selector:@selector(tick) userInfo:nil repeats:YES];
 }
 
 - (void)detach {
     [self.timer invalidate]; self.timer = nil;
     UIViewController *vc = self.vc;
-    if (self.hidSubs && vc && LSResolve()) { mpv_handle *h = LSHandle(vc); if (h) p_set(h, "sub-visibility", "yes"); }
-    if (self.pausedByUs && vc && LSResolve()) { mpv_handle *h = LSHandle(vc); if (h) p_set(h, "pause", "no"); }
-    self.hidSubs = NO; self.pausedByUs = NO; self.base = nil;
+    if (vc && LSResolve()) {
+        mpv_handle *h = LSHandle(vc);
+        if (h && self.hidSubs) p_set(h, "sub-visibility", "yes");
+        if (h && self.pausedByUs) p_set(h, "pause", "no");
+    }
+    self.hidSubs = NO; self.pausedByUs = NO;
     [self.overlay removeFromSuperview]; self.overlay = nil; self.vc = nil;
 }
 
@@ -134,11 +145,12 @@ static NSRegularExpression *WordRE, *ArabicRE;
         CGFloat w = MIN(ceil(r.size.width) + 28, b.size.width * 0.92), h = ceil(r.size.height) + 18;
         self.tv.frame = CGRectMake((b.size.width - w) / 2, b.size.height - si.bottom - 70 - h, w, h);
     }
-    CGFloat cw = MIN(b.size.width - 24, 420);
-    self.card.frame = CGRectMake((b.size.width - cw) / 2, b.size.height - si.bottom - 190, cw, 150);
+    CGFloat cw = MIN(b.size.width - 24, 440);
+    self.card.frame = CGRectMake((b.size.width - cw) / 2, b.size.height - si.bottom - 240, cw, 196);
     self.wordL.frame = CGRectMake(14, 10, cw - 28, 30);
     self.meaningL.frame = CGRectMake(14, 42, cw - 28, 52);
-    for (NSInteger i = 0; i < 3; i++) [self.card viewWithTag:100 + i].frame = CGRectMake(8 + i * (cw - 16) / 3, 100, (cw - 16) / 3, 44);
+    self.sentL.frame = CGRectMake(14, 96, cw - 28, 40);
+    for (NSInteger i = 0; i < 3; i++) [self.card viewWithTag:100 + i].frame = CGRectMake(8 + i * (cw - 16) / 3, 144, (cw - 16) / 3, 44);
 }
 
 - (void)render {
@@ -153,8 +165,8 @@ static NSRegularExpression *WordRE, *ArabicRE;
             [as addAttribute:NSFontAttributeName value:[UIFont systemFontOfSize:18] range:lr];
         }
     }];
-    UIColor *cNew = LSHex(self.colors[@"new"], [UIColor colorWithRed:1 green:0.84 blue:0.29 alpha:1]);
-    UIColor *cLearn = LSHex(self.colors[@"learning"], [UIColor colorWithRed:0.31 green:0.76 blue:0.97 alpha:1]);
+    UIColor *cNew = [UIColor colorWithRed:1 green:0.84 blue:0.29 alpha:1];
+    UIColor *cLearn = [UIColor colorWithRed:0.31 green:0.76 blue:0.97 alpha:1];
     for (NSTextCheckingResult *m in [WordRE matchesInString:t options:0 range:NSMakeRange(0, t.length)]) {
         NSString *w = [t substringWithRange:m.range]; if ([self isArabic:w]) continue;
         NSString *st = self.words[w.lowercaseString];
@@ -170,30 +182,13 @@ static NSRegularExpression *WordRE, *ArabicRE;
     if (!LSResolve()) return;
     mpv_handle *h = LSHandle(vc); if (!h) return;
     self.ticks++;
-    NSString *ext = MPVGet(h, "current-tracks/sub/external-filename");
-    NSRange rg = ext ? [ext rangeOfString:@"/sub.ass"] : NSMakeRange(NSNotFound, 0);
-    if (rg.location == NSNotFound) {
-        self.base = nil; self.overlay.hidden = YES;
-        if (self.hidSubs) { p_set(h, "sub-visibility", "yes"); self.hidSubs = NO; }
-        return;
-    }
-    self.base = [ext substringToIndex:rg.location]; self.overlay.hidden = NO;
-    if (!self.hidSubs || self.ticks % 10 == 0) { p_set(h, "sub-visibility", "no"); self.hidSubs = YES; }
-
-    NSString *t = MPVGet(h, "sub-text") ?: @"";
+    NSString *codec = MPVGet(h, "current-tracks/sub/codec");
+    BOOL image = codec && ([codec containsString:@"pgs"] || [codec containsString:@"dvd"] || [codec containsString:@"dvb"] || [codec containsString:@"xsub"]);
+    NSString *t = image ? @"" : (MPVGet(h, "sub-text") ?: @"");
+    if (image || (codec.length == 0 && t.length == 0)) {
+        if (self.hidSubs) { p_set(h, "sub-visibility", "yes"); self.hidSubs = NO; }   // leave image subs / no subs to the app
+    } else if (!self.hidSubs || self.ticks % 10 == 0) { p_set(h, "sub-visibility", "no"); self.hidSubs = YES; }
     if (![t isEqualToString:self.lastText ?: @""]) { self.lastText = t; [self render]; }
-
-    CFTimeInterval now = CACurrentMediaTime();
-    if (now - self.lastWords > 5) {
-        self.lastWords = now; __weak LSController *w = self;
-        LSReq([self.base stringByAppendingString:@"/api/words"], @"GET", nil, ^(id j) { if ([j isKindOfClass:NSDictionary.class]) { w.words = j; [w render]; } });
-        LSReq([self.base stringByAppendingString:@"/api/config"], @"GET", nil, ^(id j) { if ([j isKindOfClass:NSDictionary.class]) { w.colors = j[@"colors"]; [w render]; } });
-    }
-    if (now - self.lastPos > 1) {
-        self.lastPos = now;
-        double pos = [MPVGet(h, "time-pos") doubleValue];
-        if (pos > 0) LSReq([self.base stringByAppendingString:@"/api/position"], @"POST", @{@"t": @(pos)}, nil);
-    }
 }
 
 - (void)onTap:(UITapGestureRecognizer *)g {
@@ -204,31 +199,32 @@ static NSRegularExpression *WordRE, *ArabicRE;
     for (NSTextCheckingResult *m in [WordRE matchesInString:t options:0 range:NSMakeRange(0, t.length)]) {
         if (NSLocationInRange(idx, m.range)) {
             NSString *w = [t substringWithRange:m.range]; if ([self isArabic:w]) return;
-            [self showWord:w.lowercaseString]; return;
+            NSString *line = [[t substringWithRange:[t lineRangeForRange:m.range]] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+            [self showWord:w.lowercaseString line:line]; return;
         }
     }
 }
 
-- (void)showWord:(NSString *)w {
+- (void)showWord:(NSString *)w line:(NSString *)line {
     self.curWord = w;
     mpv_handle *h = self.vc ? LSHandle(self.vc) : NULL;
     if (h && LSResolve() && !self.pausedByUs) { p_set(h, "pause", "yes"); self.pausedByUs = YES; }
-    self.wordL.text = w; self.meaningL.text = @"…"; self.card.hidden = NO;
-    NSString *q = [w stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLQueryAllowedCharacterSet];
+    self.wordL.text = w; self.meaningL.text = @"…"; self.sentL.text = @""; self.card.hidden = NO;
     __weak LSController *ws = self;
-    LSReq([NSString stringWithFormat:@"%@/api/lookup?word=%@", self.base, q], @"GET", nil, ^(id j) {
+    LSTranslate(w, ^(NSString *tr) {
         if (![ws.curWord isEqualToString:w]) return;
-        NSString *m = [j isKindOfClass:NSDictionary.class] ? j[@"meaning"] : nil;
-        ws.meaningL.text = m.length ? m : @"تعذّر جلب المعنى";
+        ws.meaningL.text = tr ?: @"تعذّر جلب المعنى";
+    });
+    LSTranslate(line, ^(NSString *tr) {
+        if (![ws.curWord isEqualToString:w]) return;
+        ws.sentL.text = tr ?: @"";
     });
 }
 - (void)setStatus:(NSString *)s {
-    if (!self.curWord || !self.base) return;
-    NSMutableDictionary *d = [self.words mutableCopy] ?: [NSMutableDictionary new];
-    d[self.curWord] = s; self.words = d; [self render];
-    __weak LSController *w = self;
-    LSReq([self.base stringByAppendingString:@"/api/words"], @"POST", @{@"word": self.curWord, @"status": s}, ^(id j) { if ([j isKindOfClass:NSDictionary.class]) { w.words = j; [w render]; } });
-    [self closeCard];
+    if (!self.curWord) return;
+    self.words[self.curWord] = s;
+    [NSUserDefaults.standardUserDefaults setObject:self.words forKey:@"LSWords"];
+    [self render]; [self closeCard];
 }
 - (void)onLearning { [self setStatus:@"learning"]; }
 - (void)onKnown { [self setStatus:@"known"]; }

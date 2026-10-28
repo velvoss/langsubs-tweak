@@ -3,8 +3,9 @@
 // Plain Objective-C runtime, no Substrate. Inject the dylib into the Nuvio IPA.
 //
 // 3.1 highlights
-//  • Subtitle history bar: rewind/fast-forward lines and jump back to live
-//  • Speak the full original sentence from the word card or the history bar
+//  • Subtitle history controls inside the word card (prev / next / live)
+//  • Speak the full original sentence from the word card
+//  • Settings gear inside the card; optional floating gear on the player
 //  • Compact card/subtitle sizing (and the 3.0 redesign below)
 //
 // 3.0 highlights
@@ -439,6 +440,22 @@ static UIButton *LSSpeakerButton(CGFloat size, CGFloat iconSize) {
     return b;
 }
 
+static UIButton *LSCircleIcon(NSString *symbol, CGFloat size, CGFloat iconSize) {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:iconSize weight:UIImageSymbolWeightSemibold];
+    [b setImage:[UIImage systemImageNamed:symbol withConfiguration:cfg] forState:UIControlStateNormal];
+    b.tintColor = [UIColor colorWithWhite:0.92 alpha:1];
+    b.backgroundColor = [UIColor colorWithWhite:1 alpha:0.10];
+    b.layer.cornerRadius = size / 2;
+    b.layer.cornerCurve = kCACornerCurveContinuous;
+    b.translatesAutoresizingMaskIntoConstraints = NO;
+    [NSLayoutConstraint activateConstraints:@[
+        [b.widthAnchor constraintEqualToConstant:size],
+        [b.heightAnchor constraintEqualToConstant:size],
+    ]];
+    return b;
+}
+
 static UIButton *LSActionButton(NSString *title, UIColor *bg) {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
     [b setTitle:title forState:UIControlStateNormal];
@@ -621,10 +638,15 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
 @property (nonatomic, strong) UILabel *wordL, *phL, *meaningL, *defL, *ctxL;
 @property (nonatomic, strong) LSPaddedLabel *chipL;
 @property (nonatomic, strong) UIButton *speakWord, *speakMeaning, *speakSentence, *learnBtn, *knownBtn, *closeBtn;
+@property (nonatomic, strong) UIButton *histPrev, *histNext, *histLive, *gearBtn;
 @property (nonatomic, strong) UIStackView *ctxRow;
 @property (nonatomic, copy) void (^onSpeakWord)(void);
 @property (nonatomic, copy) void (^onSpeakMeaning)(void);
 @property (nonatomic, copy) void (^onSpeakSentence)(void);
+@property (nonatomic, copy) void (^onHistoryPrev)(void);
+@property (nonatomic, copy) void (^onHistoryNext)(void);
+@property (nonatomic, copy) void (^onHistoryLive)(void);
+@property (nonatomic, copy) void (^onSettings)(void);
 @property (nonatomic, copy) void (^onLearning)(void);
 @property (nonatomic, copy) void (^onKnown)(void);
 @property (nonatomic, copy) void (^onClose)(void);
@@ -634,6 +656,7 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
 - (void)updatePhonetic:(NSString *)phonetic definition:(NSString *)definition;
 - (void)updateContext:(NSString *)context;
 - (void)updateStatus:(NSString *)status;
+- (void)setHistoryCanPrev:(BOOL)prev canNext:(BOOL)next browsing:(BOOL)browsing;
 - (CGSize)sizeThatFits:(CGSize)size;
 @end
 
@@ -723,6 +746,46 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
         meaningRow.alignment = UIStackViewAlignmentCenter;
         meaningRow.spacing = 10;
 
+        UILabel *histTitle = [UILabel new];
+        histTitle.text = @"الجمل";
+        histTitle.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
+        histTitle.textColor = [UIColor colorWithWhite:0.55 alpha:1];
+
+        _histPrev = LSCircleIcon(@"chevron.backward", 30, 13);
+        _histPrev.accessibilityLabel = @"الجملة السابقة";
+        _histPrev.tintColor = [UIColor colorWithWhite:0.92 alpha:1];
+        _histNext = LSCircleIcon(@"chevron.forward", 30, 13);
+        _histNext.accessibilityLabel = @"الجملة التالية";
+
+        _histLive = [UIButton buttonWithType:UIButtonTypeSystem];
+        [_histLive setTitle:@"مباشر" forState:UIControlStateNormal];
+        _histLive.titleLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
+        [_histLive setTitleColor:LSAccent() forState:UIControlStateNormal];
+        [_histLive setTitleColor:[UIColor colorWithWhite:0.55 alpha:1] forState:UIControlStateDisabled];
+        _histLive.backgroundColor = [UIColor colorWithWhite:1 alpha:0.10];
+        _histLive.layer.cornerRadius = 15;
+        _histLive.layer.cornerCurve = kCACornerCurveContinuous;
+        _histLive.translatesAutoresizingMaskIntoConstraints = NO;
+        [_histLive.widthAnchor constraintEqualToConstant:48].active = YES;
+        [_histLive.heightAnchor constraintEqualToConstant:30].active = YES;
+        _histLive.accessibilityLabel = @"العودة إلى البث المباشر";
+        [_histPrev addTarget:self action:@selector(histPrevTapped) forControlEvents:UIControlEventTouchUpInside];
+        [_histNext addTarget:self action:@selector(histNextTapped) forControlEvents:UIControlEventTouchUpInside];
+        [_histLive addTarget:self action:@selector(histLiveTapped) forControlEvents:UIControlEventTouchUpInside];
+
+        _gearBtn = LSCircleIcon(@"gearshape.fill", 30, 13);
+        _gearBtn.tintColor = LSAccent();
+        _gearBtn.accessibilityLabel = @"الإعدادات";
+        [_gearBtn addTarget:self action:@selector(settingsTapped) forControlEvents:UIControlEventTouchUpInside];
+
+        UIView *histSpacer = [UIView new];
+        [histSpacer setContentHuggingPriority:1 forAxis:UILayoutConstraintAxisHorizontal];
+        [histSpacer setContentCompressionResistancePriority:1 forAxis:UILayoutConstraintAxisHorizontal];
+        UIStackView *histRow = [[UIStackView alloc] initWithArrangedSubviews:@[histTitle, _histPrev, _histNext, _histLive, histSpacer, _gearBtn]];
+        histRow.axis = UILayoutConstraintAxisHorizontal;
+        histRow.alignment = UIStackViewAlignmentCenter;
+        histRow.spacing = 6;
+
         _learnBtn = LSActionButton(@"أتعلمها", LSColorLearn());
         _knownBtn = LSActionButton(@"أعرفها", LSGreen());
         _closeBtn = LSActionButton(@"إغلاق", [UIColor colorWithWhite:1 alpha:0.12]);
@@ -732,10 +795,10 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
         actions.spacing = 8;
         [actions.heightAnchor constraintEqualToConstant:46].active = YES;
 
-        UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[header, sub, meaningRow, _defL, _ctxRow, actions]];
+        UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[header, sub, meaningRow, _defL, _ctxRow, histRow, actions]];
         stack.axis = UILayoutConstraintAxisVertical;
         stack.alignment = UIStackViewAlignmentFill;
-        stack.spacing = 12;
+        stack.spacing = 10;
         stack.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:stack];
 
@@ -774,6 +837,18 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
 - (void)speakWordTapped { if (self.onSpeakWord) self.onSpeakWord(); }
 - (void)speakMeaningTapped { if (self.onSpeakMeaning) self.onSpeakMeaning(); }
 - (void)speakSentenceTapped { if (self.onSpeakSentence) self.onSpeakSentence(); }
+- (void)histPrevTapped { if (self.onHistoryPrev) self.onHistoryPrev(); }
+- (void)histNextTapped { if (self.onHistoryNext) self.onHistoryNext(); }
+- (void)histLiveTapped { if (self.onHistoryLive) self.onHistoryLive(); }
+- (void)settingsTapped { if (self.onSettings) self.onSettings(); }
+- (void)setHistoryCanPrev:(BOOL)prev canNext:(BOOL)next browsing:(BOOL)browsing {
+    _histPrev.enabled = prev;
+    _histPrev.alpha = prev ? 1.0 : 0.35;
+    _histNext.enabled = next;
+    _histNext.alpha = next ? 1.0 : 0.35;
+    _histLive.enabled = browsing;
+    [_histLive setTitleColor:browsing ? LSAccent() : [UIColor colorWithWhite:0.55 alpha:1] forState:UIControlStateNormal];
+}
 - (void)learningTapped { if (self.onLearning) self.onLearning(); }
 - (void)knownTapped { if (self.onKnown) self.onKnown(); }
 - (void)closeTapped { if (self.onClose) self.onClose(); }
@@ -1574,7 +1649,7 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
 
 // ---- table data
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 4; }
-- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return (NSInteger[]){4, 3, 6, 5}[s]; }
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return (NSInteger[]){4, 3, 7, 5}[s]; }
 - (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s {
     return @[@"التعلّم", @"الترجمة", @"العرض", @"الوصول والبيانات"][s];
 }
@@ -1692,9 +1767,13 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
             c = [self basicCell:@"شفافية الخلفية" sub:@"خلفية النص فوق الفيديو" symbol:@"circle.lefthalf.filled" color:LSGray()];
             c.accessoryView = [self mkSlider:LSF(@"LSBg", 0.45) min:0 max:0.9 action:@selector(bgChanged:)];
             c.selectionStyle = UITableViewCellSelectionStyleNone;
-        } else {
+        } else if (r == 5) {
             c = [self basicCell:@"ارتفاع الترجمة" sub:@"المسافة من أسفل الشاشة" symbol:@"arrow.up.and.down" color:LSBlue()];
             c.accessoryView = [self mkSlider:LSF(@"LSBottom", 70) min:20 max:220 action:@selector(bottomChanged:)];
+            c.selectionStyle = UITableViewCellSelectionStyleNone;
+        } else {
+            c = [self basicCell:@"زر الترس العائم" sub:@"إظهار زر الإعدادات أسفل المشغّل" symbol:@"gearshape.fill" color:LSGray()];
+            c.accessoryView = [self mkSwitch:LSB(@"LSShowGear", YES) action:@selector(gearChanged:)];
             c.selectionStyle = UITableViewCellSelectionStyleNone;
         }
     } else {
@@ -1723,6 +1802,7 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
 - (void)dictChanged:(UISwitch *)s { [UD() setBool:s.on forKey:@"LSDict"]; }
 - (void)enabledChanged:(UISwitch *)s { [UD() setBool:s.on forKey:@"LSEnabled"]; }
 - (void)fabChanged:(UISwitch *)s { [UD() setBool:s.on forKey:@"LSShowFAB"]; }
+- (void)gearChanged:(UISwitch *)s { [UD() setBool:s.on forKey:@"LSShowGear"]; }
 - (void)rateChanged:(UISlider *)s { [UD() setDouble:s.value forKey:@"LSSpeechRate"]; }
 - (void)bgChanged:(UISlider *)s { [UD() setDouble:s.value forKey:@"LSBg"]; }
 - (void)bottomChanged:(UISlider *)s { [UD() setDouble:s.value forKey:@"LSBottom"]; }
@@ -1828,17 +1908,6 @@ static void LSPresentReview(void) { LSPresentRoot([LSReviewVC new]); }
 // =====================================================================
 #pragma mark - player overlay
 
-static UIButton *LSBarIcon(NSString *symbol) {
-    UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightSemibold];
-    [b setImage:[UIImage systemImageNamed:symbol withConfiguration:cfg] forState:UIControlStateNormal];
-    b.tintColor = [UIColor colorWithWhite:1 alpha:0.92];
-    b.translatesAutoresizingMaskIntoConstraints = NO;
-    [b.widthAnchor constraintEqualToConstant:32].active = YES;
-    [b.heightAnchor constraintEqualToConstant:32].active = YES;
-    return b;
-}
-
 @interface LSOverlay : UIView
 @property (nonatomic, copy) void (^onLayout)(void);
 @end
@@ -1857,10 +1926,8 @@ static UIButton *LSBarIcon(NSString *symbol) {
 @property (nonatomic, strong) LSWordCard *card;
 @property (nonatomic, strong) UIButton *gear;
 @property (nonatomic, strong) NSTimer *timer;
-@property (nonatomic, strong) UIVisualEffectView *bar;
-@property (nonatomic, strong) UIButton *prevBtn, *nextBtn, *barSpeakBtn, *liveBtn;
 @property (nonatomic, strong) NSMutableArray<NSString *> *history;
-@property (nonatomic, copy) NSString *lastText, *liveText, *curWord, *curLine, *curMeaning, *curPhonetic, *curPos, *curDef;
+@property (nonatomic, copy) NSString *lastText, *liveText, *displayLine, *curWord, *curLine, *curMeaning, *curPhonetic, *curPos, *curDef;
 @property (nonatomic) NSRange curRange;
 @property (nonatomic) BOOL hidSubs, pausedByUs, followingLive;
 @property (nonatomic) NSInteger ticks, historyIndex;
@@ -1886,7 +1953,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
         WordRE = [NSRegularExpression regularExpressionWithPattern:@"[\\p{L}\\p{M}][\\p{L}\\p{M}'’-]*" options:0 error:nil];
         ArabicRE = [NSRegularExpression regularExpressionWithPattern:@"\\p{Arabic}" options:0 error:nil];
     }
-    self.vc = vc; self.lastText = nil; self.liveText = nil; self.curWord = nil; self.curMeaning = nil;
+    self.vc = vc; self.lastText = nil; self.liveText = nil; self.displayLine = nil; self.curWord = nil; self.curMeaning = nil;
     self.curPhonetic = nil; self.curPos = nil; self.curDef = nil;
     self.curRange = NSMakeRange(NSNotFound, 0);
     self.history = [NSMutableArray new];
@@ -1910,53 +1977,16 @@ static NSRegularExpression *WordRE, *ArabicRE;
     [o addSubview:tv];
     self.tv = tv;
 
-    UIVisualEffectView *bar = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
-    bar.layer.cornerRadius = 17;
-    bar.layer.cornerCurve = kCACornerCurveContinuous;
-    bar.clipsToBounds = YES;
-    bar.hidden = YES;
-
-    UIButton *prev = LSBarIcon(@"chevron.backward");
-    UIButton *next = LSBarIcon(@"chevron.forward");
-    UIButton *spk = LSBarIcon(@"speaker.wave.2.fill");
-    UIButton *live = [UIButton buttonWithType:UIButtonTypeSystem];
-    [live setTitle:@"مباشر" forState:UIControlStateNormal];
-    live.titleLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
-    [live setTitleColor:LSAccent() forState:UIControlStateNormal];
-    [live setTitleColor:[UIColor colorWithWhite:0.55 alpha:1] forState:UIControlStateDisabled];
-    live.translatesAutoresizingMaskIntoConstraints = NO;
-    [live.widthAnchor constraintEqualToConstant:44].active = YES;
-    [live.heightAnchor constraintEqualToConstant:32].active = YES;
-    prev.accessibilityLabel = @"الجملة السابقة";
-    next.accessibilityLabel = @"الجملة التالية";
-    spk.accessibilityLabel = @"نطق الجملة الحالية";
-    live.accessibilityLabel = @"العودة إلى البث المباشر";
-    [prev addTarget:self action:@selector(prevTapped) forControlEvents:UIControlEventTouchUpInside];
-    [next addTarget:self action:@selector(nextTapped) forControlEvents:UIControlEventTouchUpInside];
-    [spk addTarget:self action:@selector(barSpeakTapped) forControlEvents:UIControlEventTouchUpInside];
-    [live addTarget:self action:@selector(liveTapped) forControlEvents:UIControlEventTouchUpInside];
-    UIStackView *barStack = [[UIStackView alloc] initWithArrangedSubviews:@[prev, next, spk, live]];
-    barStack.axis = UILayoutConstraintAxisHorizontal;
-    barStack.alignment = UIStackViewAlignmentCenter;
-    barStack.spacing = 2;
-    barStack.translatesAutoresizingMaskIntoConstraints = NO;
-    [bar.contentView addSubview:barStack];
-    [NSLayoutConstraint activateConstraints:@[
-        [barStack.leadingAnchor constraintEqualToAnchor:bar.contentView.leadingAnchor constant:9],
-        [barStack.trailingAnchor constraintEqualToAnchor:bar.contentView.trailingAnchor constant:-9],
-        [barStack.topAnchor constraintEqualToAnchor:bar.contentView.topAnchor constant:1],
-        [barStack.bottomAnchor constraintEqualToAnchor:bar.contentView.bottomAnchor constant:-1],
-    ]];
-    [o addSubview:bar];
-    self.bar = bar;
-    self.prevBtn = prev; self.nextBtn = next; self.barSpeakBtn = spk; self.liveBtn = live;
-
     LSWordCard *card = [[LSWordCard alloc] initWithFrame:CGRectZero];
     card.hidden = YES;
     card.alpha = 0;
     card.onSpeakWord = ^{ [[LSSpeech shared] speakWord:w.curWord ?: @""]; };
     card.onSpeakMeaning = ^{ [[LSSpeech shared] speakTranslation:w.curMeaning ?: @""]; };
     card.onSpeakSentence = ^{ [w speakCurrentSentence]; };
+    card.onHistoryPrev = ^{ [w prevTapped]; };
+    card.onHistoryNext = ^{ [w nextTapped]; };
+    card.onHistoryLive = ^{ [w liveTapped]; };
+    card.onSettings = ^{ [w openSettings]; };
     card.onLearning = ^{ [w setStatus:@"learning"]; };
     card.onKnown = ^{ [w setStatus:@"known"]; };
     card.onClose = ^{ [w closeCard]; };
@@ -1995,29 +2025,24 @@ static NSRegularExpression *WordRE, *ArabicRE;
     }
 }
 
-- (BOOL)isBrowsingHistory { return !self.followingLive && self.history.count > 0; }
-- (void)updateBar {
-    if (!self.bar) return;
-    BOOL browsing = [self isBrowsingHistory];
-    BOOL hasPrev = self.historyIndex > 0;
-    self.prevBtn.enabled = hasPrev;
-    self.prevBtn.alpha = hasPrev ? 0.95 : 0.30;
-    self.nextBtn.enabled = browsing;
-    self.nextBtn.alpha = browsing ? 0.95 : 0.30;
-    self.barSpeakBtn.enabled = self.lastText.length > 0;
-    self.barSpeakBtn.alpha = self.barSpeakBtn.enabled ? 0.95 : 0.30;
-    self.liveBtn.enabled = browsing;
-    [self.liveBtn setTitleColor:browsing ? LSAccent() : [UIColor colorWithWhite:0.55 alpha:1] forState:UIControlStateNormal];
-    self.bar.layer.borderWidth = browsing ? 1 : 0;
-    self.bar.layer.borderColor = [LSAccent() colorWithAlphaComponent:0.55].CGColor;
-    self.bar.alpha = browsing ? 1.0 : 0.72;
+- (void)syncCardHistory {
+    if (!self.card) return;
+    NSInteger count = (NSInteger)self.history.count;
+    BOOL browsing = !self.followingLive && count > 0;
+    BOOL canPrev = self.historyIndex > 0;
+    [self.card setHistoryCanPrev:canPrev canNext:browsing browsing:browsing];
 }
 - (void)showHistoryAt:(NSInteger)i {
     if (i < 0 || i >= (NSInteger)self.history.count) return;
     self.historyIndex = i;
+    self.displayLine = self.history[i];
     self.lastText = self.history[i];
     self.curRange = NSMakeRange(NSNotFound, 0);
     [self render];
+    if (!self.card.hidden) {
+        [self.card updateContext:self.displayLine];
+        [self syncCardHistory];
+    }
 }
 - (void)prevTapped {
     NSInteger count = (NSInteger)self.history.count;
@@ -2052,17 +2077,16 @@ static NSRegularExpression *WordRE, *ArabicRE;
 - (void)goLive {
     self.followingLive = YES;
     self.historyIndex = (NSInteger)self.history.count - 1;
+    self.displayLine = self.liveText ?: @"";
     self.lastText = self.liveText ?: @"";
     self.curRange = NSMakeRange(NSNotFound, 0);
     [self render];
     [self resumeIfPaused];
-}
-- (void)barSpeakTapped {
-    if (self.lastText.length) [[LSSpeech shared] speakText:self.lastText];
-    LSHaptic(UIImpactFeedbackStyleLight);
+    if (!self.card.hidden) [self closeCard];
 }
 - (void)speakCurrentSentence {
-    if (self.curLine.length) [[LSSpeech shared] speakText:self.curLine];
+    NSString *line = self.displayLine ?: self.curLine;
+    if (line.length) [[LSSpeech shared] speakText:line];
 }
 - (void)acceptLiveText:(NSString *)text {
     NSString *live = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
@@ -2081,16 +2105,18 @@ static NSRegularExpression *WordRE, *ArabicRE;
             self.lastText = live;
             self.curRange = NSMakeRange(NSNotFound, 0);
             [self render];
+            [self syncCardHistory];
         } else {
-            [self updateBar];
+            [self syncCardHistory];
         }
     } else if (self.followingLive) {
         self.historyIndex = (NSInteger)self.history.count - 1;
         self.lastText = @"";
         self.curRange = NSMakeRange(NSNotFound, 0);
         [self render];
+        [self syncCardHistory];
     } else {
-        [self updateBar];
+        [self syncCardHistory];
     }
 }
 
@@ -2110,9 +2136,9 @@ static NSRegularExpression *WordRE, *ArabicRE;
     self.historyIndex = -1;
     self.followingLive = YES;
     self.liveText = nil;
+    self.displayLine = nil;
     [self.overlay removeFromSuperview];
-    self.overlay = nil; self.tv = nil; self.card = nil; self.gear = nil; self.bar = nil;
-    self.prevBtn = nil; self.nextBtn = nil; self.barSpeakBtn = nil; self.liveBtn = nil; self.vc = nil;
+    self.overlay = nil; self.tv = nil; self.card = nil; self.gear = nil; self.vc = nil;
 }
 
 - (void)layout {
@@ -2144,17 +2170,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
         self.tv.frame = CGRectMake((b.size.width - ts.width) / 2, bottomLimit - ts.height, ts.width, ts.height);
     }
     self.gear.frame = CGRectMake(si.left + 14, b.size.height - si.bottom - 62, 40, 40);
-    self.gear.hidden = !self.card.hidden;
-
-    BOOL showBar = a.length && self.card.hidden && LSB(@"LSEnabled", YES);
-    self.bar.hidden = !showBar;
-    if (showBar) {
-        CGFloat bw = 164, bh = 34;
-        CGFloat by = CGRectGetMinY(self.tv.frame) - 8 - bh;
-        by = MAX(si.top + 6, by);
-        self.bar.frame = CGRectMake((b.size.width - bw) / 2, by, bw, bh);
-    }
-    [self updateBar];
+    self.gear.hidden = !self.card.hidden || !LSB(@"LSShowGear", YES);
 }
 
 - (void)render {
@@ -2238,7 +2254,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
 }
 
 - (void)showWord:(NSString *)w line:(NSString *)line {
-    self.curWord = w; self.curLine = line;
+    self.curWord = w; self.curLine = line; self.displayLine = line;
     self.curMeaning = nil; self.curPhonetic = nil; self.curPos = nil; self.curDef = nil;
     NSDictionary *e = [LSStore shared].words[w];
     NSString *status = e[@"s"] ?: @"new";
@@ -2249,6 +2265,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
     self.card.hidden = NO;
     self.card.alpha = 0;
     self.card.transform = CGAffineTransformMakeScale(0.96, 0.96);
+    [self syncCardHistory];
     [self layout];
     [UIView animateWithDuration:0.30 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0.7 options:UIViewAnimationOptionAllowUserInteraction animations:^{
         self.card.alpha = 1;
@@ -2271,6 +2288,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
     }
     if (LSB(@"LSSentence", YES)) {
         LSTranslate(line, ^(NSString *tr) {
+            if (!ws.followingLive) return;
             if (![ws.curWord isEqualToString:w] || ![ws.curLine isEqualToString:line] || !tr.length) return;
             [ws.card updateContext:tr];
             [ws layout];
@@ -2311,6 +2329,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
     }];
     self.curWord = nil;
     self.curRange = NSMakeRange(NSNotFound, 0);
+    self.displayLine = nil;
     if (self.followingLive) [self resumeIfPaused];
 }
 
@@ -2323,7 +2342,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
     UIViewController *s = LSMakeSettings(^{
         ws.overlay.hidden = NO;
         [ws render];
-        if (ws.followingLive) [ws resumeIfPaused];
+        if (ws.followingLive && ws.card.hidden) [ws resumeIfPaused];
     });
     self.overlay.hidden = YES;
     [top presentViewController:LSNavFor(s) animated:YES completion:nil];

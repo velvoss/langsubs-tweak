@@ -1,6 +1,11 @@
-// LangSubsTap 3.0 — learn languages from any subtitle.
+// LangSubsTap 3.1 — learn languages from any subtitle.
 // Tap a word inside the player, hear it, keep it, and review it later.
 // Plain Objective-C runtime, no Substrate. Inject the dylib into the Nuvio IPA.
+//
+// 3.1 highlights
+//  • Subtitle history bar: rewind/fast-forward lines and jump back to live
+//  • Speak the full original sentence from the word card or the history bar
+//  • Compact card/subtitle sizing (and the 3.0 redesign below)
 //
 // 3.0 highlights
 //  • Completely redesigned word card (blur, gradients, spring animation)
@@ -20,7 +25,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <NaturalLanguage/NaturalLanguage.h>
 
-static NSString *const LSVersion = @"3.0";
+static NSString *const LSVersion = @"3.1";
 
 // =====================================================================
 #pragma mark - libmpv access
@@ -152,6 +157,7 @@ static NSString *LSDetectVoiceLang(NSString *text) {
 + (instancetype)shared;
 - (void)speak:(NSString *)text language:(NSString *)lang;
 - (void)speakWord:(NSString *)word;
+- (void)speakText:(NSString *)text;
 - (void)speakTranslation:(NSString *)text;
 - (void)stop;
 @end
@@ -173,6 +179,7 @@ static NSString *LSDetectVoiceLang(NSString *text) {
     [self.synth speakUtterance:u];
 }
 - (void)speakWord:(NSString *)word { [self speak:word language:LSDetectVoiceLang(word)]; }
+- (void)speakText:(NSString *)text { [self speak:text language:LSDetectVoiceLang(text)]; }
 - (void)speakTranslation:(NSString *)text { [self speak:text language:LSVoiceLang(LSLang())]; }
 - (void)stop { [self.synth stopSpeakingAtBoundary:AVSpeechBoundaryImmediate]; }
 @end
@@ -613,9 +620,11 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
 @interface LSWordCard : UIView
 @property (nonatomic, strong) UILabel *wordL, *phL, *meaningL, *defL, *ctxL;
 @property (nonatomic, strong) LSPaddedLabel *chipL;
-@property (nonatomic, strong) UIButton *speakWord, *speakMeaning, *learnBtn, *knownBtn, *closeBtn;
+@property (nonatomic, strong) UIButton *speakWord, *speakMeaning, *speakSentence, *learnBtn, *knownBtn, *closeBtn;
+@property (nonatomic, strong) UIStackView *ctxRow;
 @property (nonatomic, copy) void (^onSpeakWord)(void);
 @property (nonatomic, copy) void (^onSpeakMeaning)(void);
+@property (nonatomic, copy) void (^onSpeakSentence)(void);
 @property (nonatomic, copy) void (^onLearning)(void);
 @property (nonatomic, copy) void (^onKnown)(void);
 @property (nonatomic, copy) void (^onClose)(void);
@@ -653,7 +662,7 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
         [self addSubview:accent];
 
         _wordL = [UILabel new];
-        _wordL.font = [UIFont systemFontOfSize:26 weight:UIFontWeightBold];
+        _wordL.font = [UIFont systemFontOfSize:24 weight:UIFontWeightBold];
         _wordL.textColor = UIColor.whiteColor;
         _wordL.numberOfLines = 1;
         _wordL.adjustsFontSizeToFitWidth = YES;
@@ -671,9 +680,12 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
         _speakWord = LSSpeakerButton(40, 16);
         _speakMeaning = LSSpeakerButton(34, 14);
         _speakMeaning.hidden = YES;
+        _speakSentence = LSSpeakerButton(34, 14);
+        _speakSentence.hidden = YES;
+        _speakSentence.accessibilityLabel = @"نطق الجملة الأصلية";
 
         _meaningL = [UILabel new];
-        _meaningL.font = [UIFont systemFontOfSize:19 weight:UIFontWeightSemibold];
+        _meaningL.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
         _meaningL.textColor = UIColor.whiteColor;
         _meaningL.numberOfLines = 3;
 
@@ -686,6 +698,12 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
         _ctxL.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
         _ctxL.textColor = [UIColor colorWithWhite:0.58 alpha:1];
         _ctxL.numberOfLines = 3;
+
+        _ctxRow = [[UIStackView alloc] initWithArrangedSubviews:@[_ctxL, _speakSentence]];
+        _ctxRow.axis = UILayoutConstraintAxisHorizontal;
+        _ctxRow.alignment = UIStackViewAlignmentCenter;
+        _ctxRow.spacing = 8;
+        _ctxRow.hidden = YES;
 
         UIStackView *header = [[UIStackView alloc] initWithArrangedSubviews:@[_wordL, _speakWord]];
         header.axis = UILayoutConstraintAxisHorizontal;
@@ -714,7 +732,7 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
         actions.spacing = 8;
         [actions.heightAnchor constraintEqualToConstant:46].active = YES;
 
-        UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[header, sub, meaningRow, _defL, _ctxL, actions]];
+        UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[header, sub, meaningRow, _defL, _ctxRow, actions]];
         stack.axis = UILayoutConstraintAxisVertical;
         stack.alignment = UIStackViewAlignmentFill;
         stack.spacing = 12;
@@ -737,14 +755,15 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
             [accent.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
             [accent.heightAnchor constraintEqualToConstant:3],
 
-            [stack.topAnchor constraintEqualToAnchor:self.topAnchor constant:20],
-            [stack.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:18],
-            [stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-18],
-            [stack.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-18],
+            [stack.topAnchor constraintEqualToAnchor:self.topAnchor constant:16],
+            [stack.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
+            [stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
+            [stack.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-14],
         ]];
 
         [_speakWord addTarget:self action:@selector(speakWordTapped) forControlEvents:UIControlEventTouchUpInside];
         [_speakMeaning addTarget:self action:@selector(speakMeaningTapped) forControlEvents:UIControlEventTouchUpInside];
+        [_speakSentence addTarget:self action:@selector(speakSentenceTapped) forControlEvents:UIControlEventTouchUpInside];
         [_learnBtn addTarget:self action:@selector(learningTapped) forControlEvents:UIControlEventTouchUpInside];
         [_knownBtn addTarget:self action:@selector(knownTapped) forControlEvents:UIControlEventTouchUpInside];
         [_closeBtn addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
@@ -754,6 +773,7 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
 
 - (void)speakWordTapped { if (self.onSpeakWord) self.onSpeakWord(); }
 - (void)speakMeaningTapped { if (self.onSpeakMeaning) self.onSpeakMeaning(); }
+- (void)speakSentenceTapped { if (self.onSpeakSentence) self.onSpeakSentence(); }
 - (void)learningTapped { if (self.onLearning) self.onLearning(); }
 - (void)knownTapped { if (self.onKnown) self.onKnown(); }
 - (void)closeTapped { if (self.onClose) self.onClose(); }
@@ -770,6 +790,8 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
     _defL.hidden = !definition.length;
     _ctxL.text = context.length ? [NSString stringWithFormat:@"«%@»", context] : @"";
     _ctxL.hidden = !context.length;
+    _speakSentence.hidden = !context.length;
+    _ctxRow.hidden = !context.length;
     [self setNeedsLayout];
 }
 - (void)updateMeaning:(NSString *)meaning {
@@ -785,6 +807,8 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
 - (void)updateContext:(NSString *)context {
     _ctxL.text = context.length ? [NSString stringWithFormat:@"«%@»", context] : @"";
     _ctxL.hidden = !context.length;
+    _speakSentence.hidden = !context.length;
+    _ctxRow.hidden = !context.length;
     [self setNeedsLayout];
 }
 - (void)updateStatus:(NSString *)status {
@@ -795,7 +819,7 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
 }
 
 - (CGSize)sizeThatFits:(CGSize)size {
-    CGFloat w = MIN(size.width, 520);
+    CGFloat w = MIN(size.width, 430);
     if (w <= 0) w = 320;
     CGSize s = [self systemLayoutSizeFittingSize:CGSizeMake(w, 0)
                   withHorizontalFittingPriority:UILayoutPriorityRequired
@@ -1804,6 +1828,17 @@ static void LSPresentReview(void) { LSPresentRoot([LSReviewVC new]); }
 // =====================================================================
 #pragma mark - player overlay
 
+static UIButton *LSBarIcon(NSString *symbol) {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightSemibold];
+    [b setImage:[UIImage systemImageNamed:symbol withConfiguration:cfg] forState:UIControlStateNormal];
+    b.tintColor = [UIColor colorWithWhite:1 alpha:0.92];
+    b.translatesAutoresizingMaskIntoConstraints = NO;
+    [b.widthAnchor constraintEqualToConstant:32].active = YES;
+    [b.heightAnchor constraintEqualToConstant:32].active = YES;
+    return b;
+}
+
 @interface LSOverlay : UIView
 @property (nonatomic, copy) void (^onLayout)(void);
 @end
@@ -1822,10 +1857,13 @@ static void LSPresentReview(void) { LSPresentRoot([LSReviewVC new]); }
 @property (nonatomic, strong) LSWordCard *card;
 @property (nonatomic, strong) UIButton *gear;
 @property (nonatomic, strong) NSTimer *timer;
-@property (nonatomic, copy) NSString *lastText, *curWord, *curLine, *curMeaning, *curPhonetic, *curPos, *curDef;
+@property (nonatomic, strong) UIVisualEffectView *bar;
+@property (nonatomic, strong) UIButton *prevBtn, *nextBtn, *barSpeakBtn, *liveBtn;
+@property (nonatomic, strong) NSMutableArray<NSString *> *history;
+@property (nonatomic, copy) NSString *lastText, *liveText, *curWord, *curLine, *curMeaning, *curPhonetic, *curPos, *curDef;
 @property (nonatomic) NSRange curRange;
-@property (nonatomic) BOOL hidSubs, pausedByUs;
-@property (nonatomic) NSInteger ticks;
+@property (nonatomic) BOOL hidSubs, pausedByUs, followingLive;
+@property (nonatomic) NSInteger ticks, historyIndex;
 + (instancetype)shared;
 - (BOOL)attached;
 - (void)attach:(UIViewController *)vc;
@@ -1848,9 +1886,12 @@ static NSRegularExpression *WordRE, *ArabicRE;
         WordRE = [NSRegularExpression regularExpressionWithPattern:@"[\\p{L}\\p{M}][\\p{L}\\p{M}'’-]*" options:0 error:nil];
         ArabicRE = [NSRegularExpression regularExpressionWithPattern:@"\\p{Arabic}" options:0 error:nil];
     }
-    self.vc = vc; self.lastText = nil; self.curWord = nil; self.curMeaning = nil;
+    self.vc = vc; self.lastText = nil; self.liveText = nil; self.curWord = nil; self.curMeaning = nil;
     self.curPhonetic = nil; self.curPos = nil; self.curDef = nil;
     self.curRange = NSMakeRange(NSNotFound, 0);
+    self.history = [NSMutableArray new];
+    self.historyIndex = -1;
+    self.followingLive = YES;
 
     LSOverlay *o = [[LSOverlay alloc] initWithFrame:win.bounds];
     o.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -1869,11 +1910,53 @@ static NSRegularExpression *WordRE, *ArabicRE;
     [o addSubview:tv];
     self.tv = tv;
 
+    UIVisualEffectView *bar = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+    bar.layer.cornerRadius = 17;
+    bar.layer.cornerCurve = kCACornerCurveContinuous;
+    bar.clipsToBounds = YES;
+    bar.hidden = YES;
+
+    UIButton *prev = LSBarIcon(@"chevron.left");
+    UIButton *next = LSBarIcon(@"chevron.right");
+    UIButton *spk = LSBarIcon(@"speaker.wave.2.fill");
+    UIButton *live = [UIButton buttonWithType:UIButtonTypeSystem];
+    [live setTitle:@"مباشر" forState:UIControlStateNormal];
+    live.titleLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
+    [live setTitleColor:LSAccent() forState:UIControlStateNormal];
+    [live setTitleColor:[UIColor colorWithWhite:0.55 alpha:1] forState:UIControlStateDisabled];
+    live.translatesAutoresizingMaskIntoConstraints = NO;
+    [live.widthAnchor constraintEqualToConstant:44].active = YES;
+    [live.heightAnchor constraintEqualToConstant:32].active = YES;
+    prev.accessibilityLabel = @"الجملة السابقة";
+    next.accessibilityLabel = @"الجملة التالية";
+    spk.accessibilityLabel = @"نطق الجملة الحالية";
+    live.accessibilityLabel = @"العودة إلى البث المباشر";
+    [prev addTarget:self action:@selector(prevTapped) forControlEvents:UIControlEventTouchUpInside];
+    [next addTarget:self action:@selector(nextTapped) forControlEvents:UIControlEventTouchUpInside];
+    [spk addTarget:self action:@selector(barSpeakTapped) forControlEvents:UIControlEventTouchUpInside];
+    [live addTarget:self action:@selector(liveTapped) forControlEvents:UIControlEventTouchUpInside];
+    UIStackView *barStack = [[UIStackView alloc] initWithArrangedSubviews:@[prev, next, spk, live]];
+    barStack.axis = UILayoutConstraintAxisHorizontal;
+    barStack.alignment = UIStackViewAlignmentCenter;
+    barStack.spacing = 2;
+    barStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [bar.contentView addSubview:barStack];
+    [NSLayoutConstraint activateConstraints:@[
+        [barStack.leadingAnchor constraintEqualToAnchor:bar.contentView.leadingAnchor constant:9],
+        [barStack.trailingAnchor constraintEqualToAnchor:bar.contentView.trailingAnchor constant:-9],
+        [barStack.topAnchor constraintEqualToAnchor:bar.contentView.topAnchor constant:1],
+        [barStack.bottomAnchor constraintEqualToAnchor:bar.contentView.bottomAnchor constant:-1],
+    ]];
+    [o addSubview:bar];
+    self.bar = bar;
+    self.prevBtn = prev; self.nextBtn = next; self.barSpeakBtn = spk; self.liveBtn = live;
+
     LSWordCard *card = [[LSWordCard alloc] initWithFrame:CGRectZero];
     card.hidden = YES;
     card.alpha = 0;
     card.onSpeakWord = ^{ [[LSSpeech shared] speakWord:w.curWord ?: @""]; };
     card.onSpeakMeaning = ^{ [[LSSpeech shared] speakTranslation:w.curMeaning ?: @""]; };
+    card.onSpeakSentence = ^{ [w speakCurrentSentence]; };
     card.onLearning = ^{ [w setStatus:@"learning"]; };
     card.onKnown = ^{ [w setStatus:@"known"]; };
     card.onClose = ^{ [w closeCard]; };
@@ -1912,6 +1995,105 @@ static NSRegularExpression *WordRE, *ArabicRE;
     }
 }
 
+- (BOOL)isBrowsingHistory { return !self.followingLive && self.history.count > 0; }
+- (void)updateBar {
+    if (!self.bar) return;
+    BOOL browsing = [self isBrowsingHistory];
+    BOOL hasPrev = self.historyIndex > 0;
+    self.prevBtn.enabled = hasPrev;
+    self.prevBtn.alpha = hasPrev ? 0.95 : 0.30;
+    self.nextBtn.enabled = browsing;
+    self.nextBtn.alpha = browsing ? 0.95 : 0.30;
+    self.barSpeakBtn.enabled = self.lastText.length > 0;
+    self.barSpeakBtn.alpha = self.barSpeakBtn.enabled ? 0.95 : 0.30;
+    self.liveBtn.enabled = browsing;
+    [self.liveBtn setTitleColor:browsing ? LSAccent() : [UIColor colorWithWhite:0.55 alpha:1] forState:UIControlStateNormal];
+    self.bar.layer.borderWidth = browsing ? 1 : 0;
+    self.bar.layer.borderColor = [LSAccent() colorWithAlphaComponent:0.55].CGColor;
+    self.bar.alpha = browsing ? 1.0 : 0.72;
+}
+- (void)showHistoryAt:(NSInteger)i {
+    if (i < 0 || i >= (NSInteger)self.history.count) return;
+    self.historyIndex = i;
+    self.lastText = self.history[i];
+    self.curRange = NSMakeRange(NSNotFound, 0);
+    [self render];
+}
+- (void)prevTapped {
+    NSInteger count = (NSInteger)self.history.count;
+    if (count == 0) return;
+    NSInteger target;
+    if (self.followingLive) target = self.liveText.length ? count - 2 : count - 1;
+    else target = self.historyIndex - 1;
+    if (target < 0 || target >= count) return;
+    self.followingLive = NO;
+    [self pauseIfPlaying];
+    [self showHistoryAt:target];
+    LSHaptic(UIImpactFeedbackStyleLight);
+}
+- (void)nextTapped {
+    if (self.followingLive) return;
+    NSInteger count = (NSInteger)self.history.count;
+    NSInteger target = self.historyIndex + 1;
+    BOOL targetIsLive = self.liveText.length > 0 && target == count - 1;
+    if (target < count && !targetIsLive) {
+        [self showHistoryAt:target];
+        LSHaptic(UIImpactFeedbackStyleLight);
+    } else {
+        [self goLive];
+        LSHaptic(UIImpactFeedbackStyleLight);
+    }
+}
+- (void)liveTapped {
+    if (self.followingLive) return;
+    [self goLive];
+    LSHaptic(UIImpactFeedbackStyleLight);
+}
+- (void)goLive {
+    self.followingLive = YES;
+    self.historyIndex = (NSInteger)self.history.count - 1;
+    self.lastText = self.liveText ?: @"";
+    self.curRange = NSMakeRange(NSNotFound, 0);
+    [self render];
+    [self resumeIfPaused];
+}
+- (void)barSpeakTapped {
+    if (self.lastText.length) [[LSSpeech shared] speakText:self.lastText];
+    LSHaptic(UIImpactFeedbackStyleLight);
+}
+- (void)speakCurrentSentence {
+    if (self.curLine.length) [[LSSpeech shared] speakText:self.curLine];
+}
+- (void)acceptLiveText:(NSString *)text {
+    NSString *live = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
+    if ([live isEqualToString:(self.liveText ?: @"")]) return;
+    self.liveText = live;
+    if (live.length) {
+        if (self.history.count == 0 || ![[self.history lastObject] isEqualToString:live]) {
+            [self.history addObject:live];
+            if (self.history.count > 100) {
+                [self.history removeObjectAtIndex:0];
+                if (self.historyIndex > 0) self.historyIndex--;
+            }
+        }
+        if (self.followingLive) {
+            self.historyIndex = (NSInteger)self.history.count - 1;
+            self.lastText = live;
+            self.curRange = NSMakeRange(NSNotFound, 0);
+            [self render];
+        } else {
+            [self updateBar];
+        }
+    } else if (self.followingLive) {
+        self.historyIndex = (NSInteger)self.history.count - 1;
+        self.lastText = @"";
+        self.curRange = NSMakeRange(NSNotFound, 0);
+        [self render];
+    } else {
+        [self updateBar];
+    }
+}
+
 - (void)detach {
     [self.timer invalidate]; self.timer = nil;
     UIViewController *vc = self.vc;
@@ -1924,8 +2106,13 @@ static NSRegularExpression *WordRE, *ArabicRE;
     self.hidSubs = NO;
     self.curWord = nil;
     self.curRange = NSMakeRange(NSNotFound, 0);
+    [self.history removeAllObjects];
+    self.historyIndex = -1;
+    self.followingLive = YES;
+    self.liveText = nil;
     [self.overlay removeFromSuperview];
-    self.overlay = nil; self.tv = nil; self.card = nil; self.gear = nil; self.vc = nil;
+    self.overlay = nil; self.tv = nil; self.card = nil; self.gear = nil; self.bar = nil;
+    self.prevBtn = nil; self.nextBtn = nil; self.barSpeakBtn = nil; self.liveBtn = nil; self.vc = nil;
 }
 
 - (void)layout {
@@ -1934,19 +2121,19 @@ static NSRegularExpression *WordRE, *ArabicRE;
     UIEdgeInsets si = self.overlay.safeAreaInsets;
 
     NSAttributedString *a = self.tv.attributedText;
-    CGFloat maxW = b.size.width * 0.92 - 28;
+    CGFloat maxW = b.size.width * 0.88 - 24;
     CGRect tr = CGRectZero;
     CGSize ts = CGSizeZero;
     if (a.length) {
         tr = [a boundingRectWithSize:CGSizeMake(maxW, CGFLOAT_MAX)
                              options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
                              context:nil];
-        ts = CGSizeMake(MIN(ceil(tr.size.width) + 28, b.size.width * 0.92), ceil(tr.size.height) + 18);
+        ts = CGSizeMake(MIN(ceil(tr.size.width) + 24, b.size.width * 0.88), ceil(tr.size.height) + 18);
     } else {
         self.tv.hidden = YES;
     }
 
-    CGSize cs = [self.card sizeThatFits:CGSizeMake(MIN(b.size.width - 28, 520), CGFLOAT_MAX)];
+    CGSize cs = [self.card sizeThatFits:CGSizeMake(MIN(b.size.width - 40, 430), CGFLOAT_MAX)];
     CGFloat ch = cs.height, cw = cs.width;
     CGFloat cy = b.size.height - si.bottom - 14 - ch;
     self.card.frame = CGRectMake((b.size.width - cw) / 2, cy, cw, ch);
@@ -1958,6 +2145,16 @@ static NSRegularExpression *WordRE, *ArabicRE;
     }
     self.gear.frame = CGRectMake(si.left + 14, b.size.height - si.bottom - 62, 40, 40);
     self.gear.hidden = !self.card.hidden;
+
+    BOOL showBar = a.length && self.card.hidden && LSB(@"LSEnabled", YES);
+    self.bar.hidden = !showBar;
+    if (showBar) {
+        CGFloat bw = 164, bh = 34;
+        CGFloat by = CGRectGetMinY(self.tv.frame) - 8 - bh;
+        by = MAX(si.top + 6, by);
+        self.bar.frame = CGRectMake((b.size.width - bw) / 2, by, bw, bh);
+    }
+    [self updateBar];
 }
 
 - (void)render {
@@ -2001,6 +2198,10 @@ static NSRegularExpression *WordRE, *ArabicRE;
     self.ticks++;
     if (!LSB(@"LSEnabled", YES)) {
         if (self.hidSubs) { p_set(h, "sub-visibility", "yes"); self.hidSubs = NO; }
+        [self.history removeAllObjects];
+        self.historyIndex = -1;
+        self.followingLive = YES;
+        self.liveText = nil;
         if (self.lastText.length) { self.lastText = @""; self.curRange = NSMakeRange(NSNotFound, 0); [self render]; }
         return;
     }
@@ -2013,12 +2214,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
         p_set(h, "sub-visibility", "no");
         self.hidSubs = YES;
     }
-    if (![t isEqualToString:self.lastText ?: @""]) {
-        self.lastText = t;
-        if (self.curRange.location != NSNotFound && NSMaxRange(self.curRange) > t.length)
-            self.curRange = NSMakeRange(NSNotFound, 0);
-        [self render];
-    }
+    [self acceptLiveText:t];
 }
 
 - (void)onTap:(UITapGestureRecognizer *)g {
@@ -2115,7 +2311,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
     }];
     self.curWord = nil;
     self.curRange = NSMakeRange(NSNotFound, 0);
-    [self resumeIfPaused];
+    if (self.followingLive) [self resumeIfPaused];
 }
 
 - (void)openSettings {
@@ -2127,7 +2323,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
     UIViewController *s = LSMakeSettings(^{
         ws.overlay.hidden = NO;
         [ws render];
-        [ws resumeIfPaused];
+        if (ws.followingLive) [ws resumeIfPaused];
     });
     self.overlay.hidden = YES;
     [top presentViewController:LSNavFor(s) animated:YES completion:nil];

@@ -1916,8 +1916,8 @@ static NSRegularExpression *WordRE, *ArabicRE;
     bar.clipsToBounds = YES;
     bar.hidden = YES;
 
-    UIButton *prev = LSBarIcon(@"chevron.left");
-    UIButton *next = LSBarIcon(@"chevron.right");
+    UIButton *prev = LSBarIcon(@"chevron.backward");
+    UIButton *next = LSBarIcon(@"chevron.forward");
     UIButton *spk = LSBarIcon(@"speaker.wave.2.fill");
     UIButton *live = [UIButton buttonWithType:UIButtonTypeSystem];
     [live setTitle:@"مباشر" forState:UIControlStateNormal];

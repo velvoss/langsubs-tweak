@@ -26,7 +26,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <NaturalLanguage/NaturalLanguage.h>
 
-static NSString *const LSVersion = @"3.6";
+static NSString *const LSVersion = @"3.7";
 
 // =====================================================================
 #pragma mark - libmpv access
@@ -1870,6 +1870,7 @@ static void LSPresentReview(void) { LSPresentRoot([LSReviewVC new]); }
 @property (nonatomic) NSRange curRange;
 @property (nonatomic) BOOL hidSubs, pausedByUs, followingLive;
 @property (nonatomic) NSInteger ticks, historyIndex;
+@property (nonatomic) CFTimeInterval cardOpenedAt, browseAt;
 + (instancetype)shared;
 - (BOOL)attached;
 - (void)attach:(UIViewController *)vc;
@@ -1991,6 +1992,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
 - (void)showHistoryAt:(NSInteger)i {
     if (i < 0 || i >= (NSInteger)self.history.count) return;
     self.historyIndex = i;
+    self.browseAt = CACurrentMediaTime();
     self.displayLine = self.history[i];
     self.lastText = self.history[i];
     self.curRange = NSMakeRange(NSNotFound, 0);
@@ -2006,6 +2008,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
     else target = self.historyIndex - 1;
     if (target < 0 || target >= count) return;
     self.followingLive = NO;
+    self.browseAt = CACurrentMediaTime();
     [self pauseIfPlaying];
     [self showHistoryAt:target];
     LSHaptic(UIImpactFeedbackStyleLight);
@@ -2063,8 +2066,8 @@ static NSRegularExpression *WordRE, *ArabicRE;
         }
         if (self.followingLive) {
             self.historyIndex = (NSInteger)self.history.count - 1;
+            if (!self.card.hidden && ![live isEqualToString:(self.curLine ?: @"")]) self.curRange = NSMakeRange(NSNotFound, 0);
             self.lastText = live;
-            self.curRange = NSMakeRange(NSNotFound, 0);
             [self render];
             [self updateNav];
         } else {
@@ -2147,7 +2150,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
     BOOL showCtl = a.length && cardShown && LSB(@"LSEnabled", YES);
     if (a.length) {
         self.tv.hidden = NO;
-        CGFloat tvX = MAX(8, (b.size.width - ts.width) / 2 - (showCtl ? 17 : 0));
+        CGFloat tvX = MAX(8, (b.size.width - ts.width) / 2);
         self.tv.frame = CGRectMake(tvX, tvY, ts.width, ts.height);
     }
     self.navPrev.hidden = !showCtl;
@@ -2155,9 +2158,11 @@ static NSRegularExpression *WordRE, *ArabicRE;
     self.navSpeak.hidden = !showCtl;
     if (showCtl) {
         CGFloat midY = CGRectGetMidY(self.tv.frame);
-        self.navPrev.frame = CGRectMake(CGRectGetMinX(self.tv.frame) - 6 - 28, midY - 14, 28, 28);
-        self.navSpeak.frame = CGRectMake(CGRectGetMaxX(self.tv.frame) + 6, midY - 15, 30, 30);
-        self.navNext.frame = CGRectMake(CGRectGetMaxX(self.navSpeak.frame) + 4, midY - 14, 28, 28);
+        CGFloat left = MAX(0, CGRectGetMinX(self.tv.frame) - 28);
+        CGFloat right = MIN(CGRectGetMaxX(self.tv.frame), b.size.width - 30);
+        self.navPrev.frame = CGRectMake(left, midY - 14, 28, 28);
+        self.navSpeak.frame = CGRectMake(right, midY - 30, 30, 30);
+        self.navNext.frame = CGRectMake(MIN(right + 1, b.size.width - 28), midY - 30 + 32, 28, 28);
     }
 
     self.gear.frame = CGRectMake(si.left + 14, b.size.height - si.bottom - 62, 40, 40);
@@ -2167,9 +2172,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
 
 - (CGFloat)subtitleTextWidthForCard:(BOOL)cardShown {
     CGFloat w = self.overlay ? self.overlay.bounds.size.width : UIScreen.mainScreen.bounds.size.width;
-    CGFloat maxTvW = cardShown ? (w - (6 + 28) - (6 + 30 + 4 + 28) - 16)
-                              : (w * 0.90 - 24);
-    return MAX(80, MAX(120, maxTvW) - 20);
+    return MAX(80, (w * 0.90 - 24) - 20);
 }
 
 - (NSAttributedString *)subtitleText:(NSString *)t font:(CGFloat)fs {
@@ -2180,12 +2183,6 @@ static NSRegularExpression *WordRE, *ArabicRE;
         NSFontAttributeName: [UIFont systemFontOfSize:fs weight:UIFontWeightSemibold],
         NSForegroundColorAttributeName: UIColor.whiteColor,
         NSParagraphStyleAttributeName: ps,
-    }];
-    [t enumerateSubstringsInRange:NSMakeRange(0, t.length) options:NSStringEnumerationByLines usingBlock:^(NSString *line, NSRange lr, NSRange er, BOOL *stop) {
-        if ([self isArabic:line]) {
-            [as addAttribute:NSForegroundColorAttributeName value:[UIColor colorWithWhite:0.80 alpha:1] range:lr];
-            [as addAttribute:NSFontAttributeName value:[UIFont systemFontOfSize:MAX(fs - 4, 12)] range:lr];
-        }
     }];
     UIColor *cNew = LSColorNew(), *cLearn = LSColorLearn();
     NSDictionary *W = [LSStore shared].words;
@@ -2215,7 +2212,16 @@ static NSRegularExpression *WordRE, *ArabicRE;
     if (!LSResolve()) return;
     mpv_handle *h = LSHandle(vc); if (!h) return;
     self.ticks++;
-    if (!LSB(@"LSEnabled", YES)) {
+    BOOL enabled = LSB(@"LSEnabled", YES);
+    if (enabled && self.overlay && !self.overlay.hidden && !LSIsPaused(h)) {
+        CFTimeInterval now = CACurrentMediaTime();
+        if (self.curWord && self.card && !self.card.hidden && now - self.cardOpenedAt > 1.2) {
+            [self goLive];
+        } else if (!self.curWord && self.card && self.card.hidden && !self.followingLive && now - self.browseAt > 1.2) {
+            [self goLive];
+        }
+    }
+    if (!enabled) {
         if (self.hidSubs) { p_set(h, "sub-visibility", "yes"); self.hidSubs = NO; }
         [self.history removeAllObjects];
         self.historyIndex = -1;
@@ -2258,6 +2264,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
 
 - (void)showWord:(NSString *)w line:(NSString *)line {
     self.curWord = w; self.curLine = line; self.displayLine = line;
+    self.cardOpenedAt = CACurrentMediaTime();
     self.curMeaning = nil; self.curPhonetic = nil; self.curPos = nil; self.curDef = nil;
     NSDictionary *e = [LSStore shared].words[w];
     NSString *status = e[@"s"] ?: @"new";
@@ -2333,6 +2340,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
     self.curWord = nil;
     self.curRange = NSMakeRange(NSNotFound, 0);
     self.displayLine = nil;
+    [self render];
     if (self.followingLive) [self resumeIfPaused];
 }
 

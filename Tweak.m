@@ -26,7 +26,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <NaturalLanguage/NaturalLanguage.h>
 
-static NSString *const LSVersion = @"3.2";
+static NSString *const LSVersion = @"3.3";
 
 // =====================================================================
 #pragma mark - libmpv access
@@ -658,7 +658,7 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
 - (instancetype)initWithFrame:(CGRect)frame {
     if ((self = [super initWithFrame:frame])) {
         self.backgroundColor = UIColor.clearColor;
-        self.layer.cornerRadius = 24;
+        self.layer.cornerRadius = 18;
         self.layer.cornerCurve = kCACornerCurveContinuous;
         self.clipsToBounds = YES;
 
@@ -678,50 +678,50 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
         [self addSubview:accent];
 
         _wordL = [UILabel new];
-        _wordL.font = [UIFont systemFontOfSize:24 weight:UIFontWeightBold];
+        _wordL.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
         _wordL.textColor = UIColor.whiteColor;
         _wordL.numberOfLines = 1;
         _wordL.adjustsFontSizeToFitWidth = YES;
         _wordL.minimumScaleFactor = 0.65;
 
         _phL = [UILabel new];
-        _phL.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+        _phL.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
         _phL.textColor = [UIColor colorWithWhite:0.62 alpha:1];
 
         _chipL = [LSPaddedLabel new];
-        _chipL.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
-        _chipL.layer.cornerRadius = 10;
+        _chipL.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
+        _chipL.layer.cornerRadius = 8;
         _chipL.clipsToBounds = YES;
 
-        _speakWord = LSSpeakerButton(40, 16);
-        _speakMeaning = LSSpeakerButton(34, 14);
+        _speakWord = LSSpeakerButton(28, 12);
+        _speakMeaning = LSSpeakerButton(24, 10);
         _speakMeaning.hidden = YES;
 
         _meaningL = [UILabel new];
-        _meaningL.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
+        _meaningL.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
         _meaningL.textColor = UIColor.whiteColor;
-        _meaningL.numberOfLines = 3;
+        _meaningL.numberOfLines = 2;
 
         _defL = [UILabel new];
-        _defL.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
+        _defL.font = [UIFont systemFontOfSize:11 weight:UIFontWeightRegular];
         _defL.textColor = [UIColor colorWithWhite:0.55 alpha:1];
-        _defL.numberOfLines = 3;
+        _defL.numberOfLines = 2;
 
         _ctxL = [UILabel new];
-        _ctxL.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
+        _ctxL.font = [UIFont systemFontOfSize:11 weight:UIFontWeightRegular];
         _ctxL.textColor = [UIColor colorWithWhite:0.58 alpha:1];
-        _ctxL.numberOfLines = 3;
+        _ctxL.numberOfLines = 2;
 
         _ctxRow = [[UIStackView alloc] initWithArrangedSubviews:@[_ctxL]];
         _ctxRow.axis = UILayoutConstraintAxisHorizontal;
         _ctxRow.alignment = UIStackViewAlignmentCenter;
-        _ctxRow.spacing = 8;
+        _ctxRow.spacing = 6;
         _ctxRow.hidden = YES;
 
         UIStackView *header = [[UIStackView alloc] initWithArrangedSubviews:@[_wordL, _speakWord]];
         header.axis = UILayoutConstraintAxisHorizontal;
         header.alignment = UIStackViewAlignmentCenter;
-        header.spacing = 10;
+        header.spacing = 8;
 
         UIView *subSpacer = [UIView new];
         [subSpacer setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
@@ -729,26 +729,30 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
         UIStackView *sub = [[UIStackView alloc] initWithArrangedSubviews:@[_phL, subSpacer, _chipL]];
         sub.axis = UILayoutConstraintAxisHorizontal;
         sub.alignment = UIStackViewAlignmentCenter;
-        sub.spacing = 8;
+        sub.spacing = 6;
 
         UIStackView *meaningRow = [[UIStackView alloc] initWithArrangedSubviews:@[_meaningL, _speakMeaning]];
         meaningRow.axis = UILayoutConstraintAxisHorizontal;
         meaningRow.alignment = UIStackViewAlignmentCenter;
-        meaningRow.spacing = 10;
+        meaningRow.spacing = 8;
 
         _learnBtn = LSActionButton(@"أتعلمها", LSColorLearn());
         _knownBtn = LSActionButton(@"أعرفها", LSGreen());
         _closeBtn = LSActionButton(@"إغلاق", [UIColor colorWithWhite:1 alpha:0.12]);
+        for (UIButton *b in @[_learnBtn, _knownBtn, _closeBtn]) {
+            b.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+            b.layer.cornerRadius = 10;
+        }
         UIStackView *actions = [[UIStackView alloc] initWithArrangedSubviews:@[_learnBtn, _knownBtn, _closeBtn]];
         actions.axis = UILayoutConstraintAxisHorizontal;
         actions.distribution = UIStackViewDistributionFillEqually;
-        actions.spacing = 8;
-        [actions.heightAnchor constraintEqualToConstant:46].active = YES;
+        actions.spacing = 6;
+        [actions.heightAnchor constraintEqualToConstant:34].active = YES;
 
         UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[header, sub, meaningRow, _defL, _ctxRow, actions]];
         stack.axis = UILayoutConstraintAxisVertical;
         stack.alignment = UIStackViewAlignmentFill;
-        stack.spacing = 10;
+        stack.spacing = 6;
         stack.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:stack];
 
@@ -766,12 +770,12 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
             [accent.topAnchor constraintEqualToAnchor:self.topAnchor],
             [accent.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
             [accent.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-            [accent.heightAnchor constraintEqualToConstant:3],
+            [accent.heightAnchor constraintEqualToConstant:2],
 
-            [stack.topAnchor constraintEqualToAnchor:self.topAnchor constant:16],
-            [stack.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
-            [stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
-            [stack.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-14],
+            [stack.topAnchor constraintEqualToAnchor:self.topAnchor constant:10],
+            [stack.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:10],
+            [stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-10],
+            [stack.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-9],
         ]];
 
         [_speakWord addTarget:self action:@selector(speakWordTapped) forControlEvents:UIControlEventTouchUpInside];
@@ -828,7 +832,7 @@ static UIButton *LSActionButton(NSString *title, UIColor *bg) {
 }
 
 - (CGSize)sizeThatFits:(CGSize)size {
-    CGFloat w = MIN(size.width, 430);
+    CGFloat w = MIN(size.width, 360);
     if (w <= 0) w = 320;
     CGSize s = [self systemLayoutSizeFittingSize:CGSizeMake(w, 0)
                   withHorizontalFittingPriority:UILayoutPriorityRequired
@@ -1859,8 +1863,7 @@ static void LSPresentReview(void) { LSPresentRoot([LSReviewVC new]); }
 @property (nonatomic, strong) UITextView *tv;
 @property (nonatomic, strong) LSWordCard *card;
 @property (nonatomic, strong) UIButton *gear;
-@property (nonatomic, strong) UIStackView *nav;
-@property (nonatomic, strong) UIButton *navPrev, *navNext, *navLive, *navSpeak, *navGear;
+@property (nonatomic, strong) UIButton *navPrev, *navNext, *navSpeak;
 @property (nonatomic, strong) NSTimer *timer;
 @property (nonatomic, strong) NSMutableArray<NSString *> *history;
 @property (nonatomic, copy) NSString *lastText, *liveText, *displayLine, *curWord, *curLine, *curMeaning, *curPhonetic, *curPos, *curDef;
@@ -1913,41 +1916,21 @@ static NSRegularExpression *WordRE, *ArabicRE;
     [o addSubview:tv];
     self.tv = tv;
 
-    UIButton *np = LSCircleIcon(@"chevron.backward", 30, 13);
-    UIButton *nn = LSCircleIcon(@"chevron.forward", 30, 13);
+    UIButton *np = LSCircleIcon(@"chevron.backward", 28, 12);
+    UIButton *nn = LSCircleIcon(@"chevron.forward", 28, 12);
     UIButton *ns = LSCircleIcon(@"speaker.wave.2.fill", 30, 13);
     ns.tintColor = LSAccent();
-    UIButton *ng = LSCircleIcon(@"gearshape.fill", 30, 13);
-    ng.tintColor = LSAccent();
-    UIButton *nl = [UIButton buttonWithType:UIButtonTypeSystem];
-    [nl setTitle:@"مباشر" forState:UIControlStateNormal];
-    nl.titleLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
-    [nl setTitleColor:LSAccent() forState:UIControlStateNormal];
-    [nl setTitleColor:[UIColor colorWithWhite:0.55 alpha:1] forState:UIControlStateDisabled];
-    nl.backgroundColor = [UIColor colorWithWhite:1 alpha:0.10];
-    nl.layer.cornerRadius = 15;
-    nl.layer.cornerCurve = kCACornerCurveContinuous;
-    nl.translatesAutoresizingMaskIntoConstraints = NO;
-    [nl.widthAnchor constraintEqualToConstant:44].active = YES;
-    [nl.heightAnchor constraintEqualToConstant:30].active = YES;
     np.accessibilityLabel = @"الجملة السابقة";
     nn.accessibilityLabel = @"الجملة التالية";
-    nl.accessibilityLabel = @"العودة إلى البث المباشر";
     ns.accessibilityLabel = @"نطق الجملة الحالية";
-    ng.accessibilityLabel = @"الإعدادات";
     [np addTarget:self action:@selector(prevTapped) forControlEvents:UIControlEventTouchUpInside];
     [nn addTarget:self action:@selector(nextTapped) forControlEvents:UIControlEventTouchUpInside];
-    [nl addTarget:self action:@selector(liveTapped) forControlEvents:UIControlEventTouchUpInside];
     [ns addTarget:self action:@selector(navSpeakTapped) forControlEvents:UIControlEventTouchUpInside];
-    [ng addTarget:self action:@selector(openSettings) forControlEvents:UIControlEventTouchUpInside];
-    UIStackView *nav = [[UIStackView alloc] initWithArrangedSubviews:@[np, nn, nl, ns, ng]];
-    nav.axis = UILayoutConstraintAxisHorizontal;
-    nav.alignment = UIStackViewAlignmentCenter;
-    nav.spacing = 4;
-    nav.hidden = YES;
-    [o addSubview:nav];
-    self.nav = nav;
-    self.navPrev = np; self.navNext = nn; self.navLive = nl; self.navSpeak = ns; self.navGear = ng;
+    np.hidden = YES; nn.hidden = YES; ns.hidden = YES;
+    [o addSubview:np];
+    [o addSubview:ns];
+    [o addSubview:nn];
+    self.navPrev = np; self.navNext = nn; self.navSpeak = ns;
 
     LSWordCard *card = [[LSWordCard alloc] initWithFrame:CGRectZero];
     card.hidden = YES;
@@ -1993,15 +1976,13 @@ static NSRegularExpression *WordRE, *ArabicRE;
 }
 
 - (void)updateNav {
-    if (!self.nav) return;
+    if (!self.navPrev) return;
     BOOL browsing = !self.followingLive && self.history.count > 0;
     BOOL hasPrev = self.historyIndex > 0;
     self.navPrev.enabled = hasPrev;
     self.navPrev.alpha = hasPrev ? 1.0 : 0.35;
     self.navNext.enabled = browsing;
     self.navNext.alpha = browsing ? 1.0 : 0.35;
-    self.navLive.enabled = browsing;
-    [self.navLive setTitleColor:browsing ? LSAccent() : [UIColor colorWithWhite:0.55 alpha:1] forState:UIControlStateNormal];
     self.navSpeak.enabled = self.lastText.length > 0;
     self.navSpeak.alpha = self.navSpeak.enabled ? 1.0 : 0.35;
 }
@@ -2116,8 +2097,8 @@ static NSRegularExpression *WordRE, *ArabicRE;
     self.liveText = nil;
     self.displayLine = nil;
     [self.overlay removeFromSuperview];
-    self.overlay = nil; self.tv = nil; self.card = nil; self.gear = nil; self.nav = nil;
-    self.navPrev = nil; self.navNext = nil; self.navLive = nil; self.navSpeak = nil; self.navGear = nil; self.vc = nil;
+    self.overlay = nil; self.tv = nil; self.card = nil; self.gear = nil;
+    self.navPrev = nil; self.navNext = nil; self.navSpeak = nil; self.vc = nil;
 }
 
 - (void)layout {
@@ -2125,40 +2106,48 @@ static NSRegularExpression *WordRE, *ArabicRE;
     CGRect b = self.overlay.bounds;
     UIEdgeInsets si = self.overlay.safeAreaInsets;
 
+    CGFloat sideL = 6 + 28;
+    CGFloat sideR = 6 + 30 + 4 + 28;
+    CGFloat maxTvW = MAX(120, b.size.width - sideL - sideR - 16);
+    CGFloat maxTextW = MAX(80, maxTvW - 20);
+
     NSAttributedString *a = self.tv.attributedText;
-    CGFloat maxW = b.size.width * 0.88 - 24;
     CGRect tr = CGRectZero;
     CGSize ts = CGSizeZero;
     if (a.length) {
-        tr = [a boundingRectWithSize:CGSizeMake(maxW, CGFLOAT_MAX)
+        tr = [a boundingRectWithSize:CGSizeMake(maxTextW, CGFLOAT_MAX)
                              options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
                              context:nil];
-        ts = CGSizeMake(MIN(ceil(tr.size.width) + 24, b.size.width * 0.88), ceil(tr.size.height) + 18);
+        ts = CGSizeMake(MIN(ceil(tr.size.width) + 20, maxTvW), ceil(tr.size.height) + 18);
     } else {
         self.tv.hidden = YES;
     }
 
-    CGFloat subBottom = b.size.height - si.bottom - LSF(@"LSBottom", 70);
+    CGSize cs = [self.card sizeThatFits:CGSizeMake(MIN(b.size.width - 32, 360), CGFLOAT_MAX)];
+    CGFloat ch = cs.height, cw = cs.width;
+    CGFloat cardBottom = b.size.height - si.bottom - 10;
+    CGFloat cy = MAX(si.top + 6, cardBottom - ch);
+    self.card.frame = CGRectMake((b.size.width - cw) / 2, cy, cw, ch);
+
+    CGFloat tvBottom = self.card.hidden ? (b.size.height - si.bottom - LSF(@"LSBottom", 70))
+                                        : (CGRectGetMinY(self.card.frame) - 8);
+    CGFloat tvY = MAX(si.top + 6, tvBottom - ts.height);
     if (a.length) {
         self.tv.hidden = NO;
-        self.tv.frame = CGRectMake((b.size.width - ts.width) / 2, subBottom - ts.height, ts.width, ts.height);
+        CGFloat tvX = MAX(8, (b.size.width - ts.width) / 2 - 17);
+        self.tv.frame = CGRectMake(tvX, tvY, ts.width, ts.height);
     }
 
-    BOOL showNav = a.length && LSB(@"LSEnabled", YES);
-    self.nav.hidden = !showNav;
-    CGFloat navTop = 0;
-    if (showNav) {
-        CGFloat navW = 180, navH = 30;
-        navTop = CGRectGetMinY(self.tv.frame) - 6 - navH;
-        navTop = MAX(si.top + 6, navTop);
-        self.nav.frame = CGRectMake((b.size.width - navW) / 2, navTop, navW, navH);
+    BOOL showCtl = a.length && LSB(@"LSEnabled", YES);
+    self.navPrev.hidden = !showCtl;
+    self.navNext.hidden = !showCtl;
+    self.navSpeak.hidden = !showCtl;
+    if (showCtl) {
+        CGFloat midY = CGRectGetMidY(self.tv.frame);
+        self.navPrev.frame = CGRectMake(CGRectGetMinX(self.tv.frame) - 6 - 28, midY - 14, 28, 28);
+        self.navSpeak.frame = CGRectMake(CGRectGetMaxX(self.tv.frame) + 6, midY - 15, 30, 30);
+        self.navNext.frame = CGRectMake(CGRectGetMaxX(self.navSpeak.frame) + 4, midY - 14, 28, 28);
     }
-
-    CGSize cs = [self.card sizeThatFits:CGSizeMake(MIN(b.size.width - 40, 430), CGFLOAT_MAX)];
-    CGFloat ch = cs.height, cw = cs.width;
-    CGFloat cardBottom = showNav ? (navTop - 8) : (b.size.height - si.bottom - 14);
-    CGFloat cy = MAX(si.top + 8, cardBottom - ch);
-    self.card.frame = CGRectMake((b.size.width - cw) / 2, cy, cw, ch);
 
     self.gear.frame = CGRectMake(si.left + 14, b.size.height - si.bottom - 62, 40, 40);
     self.gear.hidden = !self.card.hidden || !LSB(@"LSShowGear", YES);

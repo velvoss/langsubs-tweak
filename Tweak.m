@@ -26,7 +26,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <NaturalLanguage/NaturalLanguage.h>
 
-static NSString *const LSVersion = @"3.3";
+static NSString *const LSVersion = @"3.4";
 
 // =====================================================================
 #pragma mark - libmpv access
@@ -1912,6 +1912,8 @@ static NSRegularExpression *WordRE, *ArabicRE;
     tv.layer.cornerCurve = kCACornerCurveContinuous;
     tv.textContainerInset = UIEdgeInsetsMake(9, 10, 9, 10);
     tv.textContainer.lineFragmentPadding = 4;
+    tv.textContainer.maximumNumberOfLines = 2;
+    tv.textContainer.lineBreakMode = NSLineBreakByTruncatingTail;
     [tv addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTap:)]];
     [o addSubview:tv];
     self.tv = tv;
@@ -2110,7 +2112,9 @@ static NSRegularExpression *WordRE, *ArabicRE;
     CGFloat sideR = 6 + 30 + 4 + 28;
     CGFloat maxTvW = MAX(120, b.size.width - sideL - sideR - 16);
     CGFloat maxTextW = MAX(80, maxTvW - 20);
+    CGFloat maxTextH = ceil([UIFont systemFontOfSize:LSF(@"LSFont", 22) weight:UIFontWeightSemibold].lineHeight * 2) + 18;
 
+    BOOL cardShown = !self.card.hidden;
     NSAttributedString *a = self.tv.attributedText;
     CGRect tr = CGRectZero;
     CGSize ts = CGSizeZero;
@@ -2118,7 +2122,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
         tr = [a boundingRectWithSize:CGSizeMake(maxTextW, CGFLOAT_MAX)
                              options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
                              context:nil];
-        ts = CGSizeMake(MIN(ceil(tr.size.width) + 20, maxTvW), ceil(tr.size.height) + 18);
+        ts = CGSizeMake(MIN(ceil(tr.size.width) + 20, maxTvW), MIN(ceil(tr.size.height) + 18, maxTextH));
     } else {
         self.tv.hidden = YES;
     }
@@ -2129,16 +2133,16 @@ static NSRegularExpression *WordRE, *ArabicRE;
     CGFloat cy = MAX(si.top + 6, cardBottom - ch);
     self.card.frame = CGRectMake((b.size.width - cw) / 2, cy, cw, ch);
 
-    CGFloat tvBottom = self.card.hidden ? (b.size.height - si.bottom - LSF(@"LSBottom", 70))
-                                        : (CGRectGetMinY(self.card.frame) - 8);
-    CGFloat tvY = MAX(si.top + 6, tvBottom - ts.height);
+    CGFloat tvBottom = cardShown ? (CGRectGetMinY(self.card.frame) - 20)
+                                 : (b.size.height - si.bottom - LSF(@"LSBottom", 70));
+    CGFloat tvY = MAX(si.top + 40, tvBottom - ts.height);
     if (a.length) {
         self.tv.hidden = NO;
         CGFloat tvX = MAX(8, (b.size.width - ts.width) / 2 - 17);
         self.tv.frame = CGRectMake(tvX, tvY, ts.width, ts.height);
     }
 
-    BOOL showCtl = a.length && LSB(@"LSEnabled", YES);
+    BOOL showCtl = a.length && cardShown && LSB(@"LSEnabled", YES);
     self.navPrev.hidden = !showCtl;
     self.navNext.hidden = !showCtl;
     self.navSpeak.hidden = !showCtl;

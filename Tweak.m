@@ -26,7 +26,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <NaturalLanguage/NaturalLanguage.h>
 
-static NSString *const LSVersion = @"3.4";
+static NSString *const LSVersion = @"3.5";
 
 // =====================================================================
 #pragma mark - libmpv access
@@ -1912,8 +1912,8 @@ static NSRegularExpression *WordRE, *ArabicRE;
     tv.layer.cornerCurve = kCACornerCurveContinuous;
     tv.textContainerInset = UIEdgeInsetsMake(9, 10, 9, 10);
     tv.textContainer.lineFragmentPadding = 4;
-    tv.textContainer.maximumNumberOfLines = 2;
-    tv.textContainer.lineBreakMode = NSLineBreakByTruncatingTail;
+    tv.textContainer.maximumNumberOfLines = 0;
+    tv.textContainer.lineBreakMode = NSLineBreakByWordWrapping;
     [tv addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTap:)]];
     [o addSubview:tv];
     self.tv = tv;
@@ -2108,11 +2108,8 @@ static NSRegularExpression *WordRE, *ArabicRE;
     CGRect b = self.overlay.bounds;
     UIEdgeInsets si = self.overlay.safeAreaInsets;
 
-    CGFloat sideL = 6 + 28;
-    CGFloat sideR = 6 + 30 + 4 + 28;
-    CGFloat maxTvW = MAX(120, b.size.width - sideL - sideR - 16);
-    CGFloat maxTextW = MAX(80, maxTvW - 20);
-    CGFloat maxTextH = ceil([UIFont systemFontOfSize:LSF(@"LSFont", 22) weight:UIFontWeightSemibold].lineHeight * 2) + 18;
+    CGFloat maxTextW = [self subtitleTextWidth];
+    CGFloat maxTvW = maxTextW + 20;
 
     BOOL cardShown = !self.card.hidden;
     NSAttributedString *a = self.tv.attributedText;
@@ -2122,7 +2119,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
         tr = [a boundingRectWithSize:CGSizeMake(maxTextW, CGFLOAT_MAX)
                              options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
                              context:nil];
-        ts = CGSizeMake(MIN(ceil(tr.size.width) + 20, maxTvW), MIN(ceil(tr.size.height) + 18, maxTextH));
+        ts = CGSizeMake(MIN(ceil(tr.size.width) + 20, maxTvW), ceil(tr.size.height) + 18);
     } else {
         self.tv.hidden = YES;
     }
@@ -2133,16 +2130,15 @@ static NSRegularExpression *WordRE, *ArabicRE;
     CGFloat cy = MAX(si.top + 6, cardBottom - ch);
     self.card.frame = CGRectMake((b.size.width - cw) / 2, cy, cw, ch);
 
-    CGFloat tvBottom = cardShown ? (CGRectGetMinY(self.card.frame) - 20)
+    CGFloat tvBottom = cardShown ? (CGRectGetMinY(self.card.frame) - 30)
                                  : (b.size.height - si.bottom - LSF(@"LSBottom", 70));
     CGFloat tvY = MAX(si.top + 40, tvBottom - ts.height);
+    BOOL showCtl = a.length && cardShown && LSB(@"LSEnabled", YES);
     if (a.length) {
         self.tv.hidden = NO;
-        CGFloat tvX = MAX(8, (b.size.width - ts.width) / 2 - 17);
+        CGFloat tvX = MAX(8, (b.size.width - ts.width) / 2 - (showCtl ? 17 : 0));
         self.tv.frame = CGRectMake(tvX, tvY, ts.width, ts.height);
     }
-
-    BOOL showCtl = a.length && cardShown && LSB(@"LSEnabled", YES);
     self.navPrev.hidden = !showCtl;
     self.navNext.hidden = !showCtl;
     self.navSpeak.hidden = !showCtl;
@@ -2158,12 +2154,16 @@ static NSRegularExpression *WordRE, *ArabicRE;
     [self updateNav];
 }
 
-- (void)render {
-    NSString *t = self.lastText ?: @"";
-    double fs = LSF(@"LSFont", 22);
-    self.tv.backgroundColor = [UIColor colorWithWhite:0 alpha:LSF(@"LSBg", 0.45)];
+- (CGFloat)subtitleTextWidth {
+    CGFloat w = self.overlay ? self.overlay.bounds.size.width : UIScreen.mainScreen.bounds.size.width;
+    CGFloat maxTvW = MAX(120, w - (6 + 28) - (6 + 30 + 4 + 28) - 16);
+    return MAX(80, maxTvW - 20);
+}
+
+- (NSAttributedString *)subtitleText:(NSString *)t font:(CGFloat)fs {
     NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new];
     ps.alignment = NSTextAlignmentCenter;
+    ps.lineBreakMode = NSLineBreakByWordWrapping;
     NSMutableAttributedString *as = [[NSMutableAttributedString alloc] initWithString:t attributes:@{
         NSFontAttributeName: [UIFont systemFontOfSize:fs weight:UIFontWeightSemibold],
         NSForegroundColorAttributeName: UIColor.whiteColor,
@@ -2187,7 +2187,25 @@ static NSRegularExpression *WordRE, *ArabicRE;
     if (self.curRange.location != NSNotFound && NSMaxRange(self.curRange) <= t.length) {
         [as addAttribute:NSBackgroundColorAttributeName value:[LSAccent() colorWithAlphaComponent:0.30] range:self.curRange];
     }
-    self.tv.attributedText = as;
+    return as;
+}
+
+- (void)render {
+    NSString *t = self.lastText ?: @"";
+    self.tv.backgroundColor = [UIColor colorWithWhite:0 alpha:LSF(@"LSBg", 0.45)];
+    CGFloat base = LSF(@"LSFont", 22);
+    CGFloat width = [self subtitleTextWidth];
+    NSAttributedString *chosen = nil;
+    for (CGFloat fs = base; fs >= 14; fs -= 1) {
+        NSAttributedString *cand = [self subtitleText:t font:fs];
+        CGRect r = [cand boundingRectWithSize:CGSizeMake(width, CGFLOAT_MAX)
+                                      options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                      context:nil];
+        CGFloat lh = [UIFont systemFontOfSize:fs weight:UIFontWeightSemibold].lineHeight;
+        if (r.size.height <= lh * 2 + 4) { chosen = cand; break; }
+    }
+    if (!chosen) chosen = [self subtitleText:t font:14];
+    self.tv.attributedText = chosen;
     [self layout];
 }
 

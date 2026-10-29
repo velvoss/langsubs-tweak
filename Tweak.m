@@ -26,7 +26,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <NaturalLanguage/NaturalLanguage.h>
 
-static NSString *const LSVersion = @"3.5";
+static NSString *const LSVersion = @"3.6";
 
 // =====================================================================
 #pragma mark - libmpv access
@@ -2108,10 +2108,10 @@ static NSRegularExpression *WordRE, *ArabicRE;
     CGRect b = self.overlay.bounds;
     UIEdgeInsets si = self.overlay.safeAreaInsets;
 
-    CGFloat maxTextW = [self subtitleTextWidth];
+    BOOL cardShown = !self.card.hidden;
+    CGFloat maxTextW = [self subtitleTextWidthForCard:cardShown];
     CGFloat maxTvW = maxTextW + 20;
 
-    BOOL cardShown = !self.card.hidden;
     NSAttributedString *a = self.tv.attributedText;
     CGRect tr = CGRectZero;
     CGSize ts = CGSizeZero;
@@ -2124,15 +2124,26 @@ static NSRegularExpression *WordRE, *ArabicRE;
         self.tv.hidden = YES;
     }
 
+    CGFloat areaTop = si.top;
+    CGFloat areaBottom = b.size.height - si.bottom;
     CGSize cs = [self.card sizeThatFits:CGSizeMake(MIN(b.size.width - 32, 360), CGFLOAT_MAX)];
     CGFloat ch = cs.height, cw = cs.width;
-    CGFloat cardBottom = b.size.height - si.bottom - 10;
-    CGFloat cy = MAX(si.top + 6, cardBottom - ch);
+    CGFloat cy = areaTop + (areaBottom - areaTop - ch) / 2;
+    cy = MAX(areaTop + 6, MIN(areaBottom - 10 - ch, cy));
+
+    CGFloat gap = 30;
+    CGFloat minTvY = areaTop + 40;
+    if (cardShown && a.length) {
+        CGFloat tvY = cy - gap - ts.height;
+        if (tvY < minTvY) {
+            CGFloat shift = minTvY - tvY;
+            cy = MIN(areaBottom - 10 - ch, cy + shift);
+        }
+    }
     self.card.frame = CGRectMake((b.size.width - cw) / 2, cy, cw, ch);
 
-    CGFloat tvBottom = cardShown ? (CGRectGetMinY(self.card.frame) - 30)
-                                 : (b.size.height - si.bottom - LSF(@"LSBottom", 70));
-    CGFloat tvY = MAX(si.top + 40, tvBottom - ts.height);
+    CGFloat tvBottom = cardShown ? (cy - gap) : (areaBottom - LSF(@"LSBottom", 70));
+    CGFloat tvY = MAX(minTvY, tvBottom - ts.height);
     BOOL showCtl = a.length && cardShown && LSB(@"LSEnabled", YES);
     if (a.length) {
         self.tv.hidden = NO;
@@ -2154,10 +2165,11 @@ static NSRegularExpression *WordRE, *ArabicRE;
     [self updateNav];
 }
 
-- (CGFloat)subtitleTextWidth {
+- (CGFloat)subtitleTextWidthForCard:(BOOL)cardShown {
     CGFloat w = self.overlay ? self.overlay.bounds.size.width : UIScreen.mainScreen.bounds.size.width;
-    CGFloat maxTvW = MAX(120, w - (6 + 28) - (6 + 30 + 4 + 28) - 16);
-    return MAX(80, maxTvW - 20);
+    CGFloat maxTvW = cardShown ? (w - (6 + 28) - (6 + 30 + 4 + 28) - 16)
+                              : (w * 0.90 - 24);
+    return MAX(80, MAX(120, maxTvW) - 20);
 }
 
 - (NSAttributedString *)subtitleText:(NSString *)t font:(CGFloat)fs {
@@ -2193,19 +2205,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
 - (void)render {
     NSString *t = self.lastText ?: @"";
     self.tv.backgroundColor = [UIColor colorWithWhite:0 alpha:LSF(@"LSBg", 0.45)];
-    CGFloat base = LSF(@"LSFont", 22);
-    CGFloat width = [self subtitleTextWidth];
-    NSAttributedString *chosen = nil;
-    for (CGFloat fs = base; fs >= 14; fs -= 1) {
-        NSAttributedString *cand = [self subtitleText:t font:fs];
-        CGRect r = [cand boundingRectWithSize:CGSizeMake(width, CGFLOAT_MAX)
-                                      options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
-                                      context:nil];
-        CGFloat lh = [UIFont systemFontOfSize:fs weight:UIFontWeightSemibold].lineHeight;
-        if (r.size.height <= lh * 2 + 4) { chosen = cand; break; }
-    }
-    if (!chosen) chosen = [self subtitleText:t font:14];
-    self.tv.attributedText = chosen;
+    self.tv.attributedText = [self subtitleText:t font:LSF(@"LSFont", 22)];
     [self layout];
 }
 

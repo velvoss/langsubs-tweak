@@ -1,4 +1,4 @@
-// LangSubsTap 3.8 — learn languages from any subtitle.
+// LangSubsTap 3.9 — learn languages from any subtitle.
 // Tap a word inside the player, hear it, keep it, and review it later.
 // Plain Objective-C runtime, no Substrate. Inject the dylib into the Nuvio IPA.
 //
@@ -26,7 +26,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <NaturalLanguage/NaturalLanguage.h>
 
-static NSString *const LSVersion = @"3.8";
+static NSString *const LSVersion = @"3.9";
 
 // =====================================================================
 #pragma mark - libmpv access
@@ -34,6 +34,7 @@ static NSString *const LSVersion = @"3.8";
 typedef void mpv_handle;
 static char *(*p_get)(mpv_handle *, const char *);
 static int (*p_set)(mpv_handle *, const char *, const char *);
+static int (*p_cmd)(mpv_handle *, const char **);
 static void (*p_free)(void *);
 
 static BOOL LSResolve(void) {
@@ -41,6 +42,7 @@ static BOOL LSResolve(void) {
     dispatch_once(&once, ^{
         p_get = dlsym(RTLD_DEFAULT, "mpv_get_property_string");
         p_set = dlsym(RTLD_DEFAULT, "mpv_set_property_string");
+        p_cmd = dlsym(RTLD_DEFAULT, "mpv_command");
         p_free = dlsym(RTLD_DEFAULT, "mpv_free");
         ok = p_get && p_set && p_free;
         if (!ok) NSLog(@"[LangSubsTap] libmpv symbols not found (static link?)");
@@ -1907,12 +1909,13 @@ static void LSPresentReview(void) { LSPresentRoot([LSReviewVC new]); }
 - (void)layoutSubviews { [super layoutSubviews]; if (self.onLayout) self.onLayout(); }
 @end
 
-@interface LSController : NSObject
+@interface LSController : NSObject <UIDocumentPickerDelegate>
 @property (nonatomic, weak) UIViewController *vc;
 @property (nonatomic, strong) LSOverlay *overlay;
 @property (nonatomic, strong) UITextView *tv;
 @property (nonatomic, strong) LSWordCard *card;
 @property (nonatomic, strong) UIButton *gear;
+@property (nonatomic, strong) UIButton *subBtn;
 @property (nonatomic, strong) UIButton *navPrev, *navNext, *navSpeak;
 @property (nonatomic, strong) NSTimer *timer;
 @property (nonatomic, strong) NSMutableArray<NSString *> *history;
@@ -1926,6 +1929,9 @@ static void LSPresentReview(void) { LSPresentRoot([LSReviewVC new]); }
 - (void)attach:(UIViewController *)vc;
 - (void)detach;
 - (void)openSettings;
+- (void)pickSubtitleFile;
+- (void)promptSubtitleURL;
+- (void)loadExternalSubtitle:(NSString *)pathOrURL;
 @end
 
 static NSRegularExpression *WordRE, *ArabicRE;
@@ -2006,6 +2012,12 @@ static NSRegularExpression *WordRE, *ArabicRE;
     [g addTarget:self action:@selector(openSettings) forControlEvents:UIControlEventTouchUpInside];
     [o addSubview:g];
     self.gear = g;
+
+    UIButton *sb = LSCircleIcon(@"captions.bubble.fill", 40, 17);
+    sb.accessibilityLabel = @"تحميل ترجمة خارجية";
+    [sb addTarget:self action:@selector(subtitleTapped) forControlEvents:UIControlEventTouchUpInside];
+    [o addSubview:sb];
+    self.subBtn = sb;
 
     [win addSubview:o];   // window level: above Nuvio's Compose layer so taps reach us
     self.timer = [NSTimer timerWithTimeInterval:0.2 target:self selector:@selector(tick) userInfo:nil repeats:YES];
@@ -2134,6 +2146,114 @@ static NSRegularExpression *WordRE, *ArabicRE;
     }
 }
 
+- (UIViewController *)subtitleHost {
+    if (self.vc && self.vc.view.window) return self.vc;
+    return LSTopPresented();
+}
+- (void)showSubtitleAlert:(NSString *)title message:(NSString *)message {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIViewController *host = [self subtitleHost];
+        if (!host) return;
+        UIAlertController *ac = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
+        [ac addAction:[UIAlertAction actionWithTitle:@"حسناً" style:UIAlertActionStyleDefault handler:nil]];
+        [host presentViewController:ac animated:YES completion:nil];
+    });
+}
+- (void)subtitleTapped {
+    UIViewController *host = [self subtitleHost];
+    if (!host) return;
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"ترجمة خارجية"
+                                                               message:@"اختر ملف ترجمة من الجهاز أو أدخل رابطاً مباشراً."
+                                                        preferredStyle:UIAlertControllerStyleActionSheet];
+    __weak LSController *ws = self;
+    [ac addAction:[UIAlertAction actionWithTitle:@"من الجهاز (ملف)" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [ws pickSubtitleFile]; });
+    }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"من رابط (URL)" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [ws promptSubtitleURL]; });
+    }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
+    ac.popoverPresentationController.sourceView = self.subBtn;
+    ac.popoverPresentationController.sourceRect = self.subBtn.bounds;
+    [host presentViewController:ac animated:YES completion:nil];
+}
+- (void)pickSubtitleFile {
+    UIViewController *host = [self subtitleHost];
+    if (!host) return;
+    UIDocumentPickerViewController *p = [[UIDocumentPickerViewController alloc]
+        initWithDocumentTypes:@[@"public.plain-text", @"public.text", @"public.data"]
+                       inMode:UIDocumentPickerModeImport];
+    p.delegate = self;
+    p.allowsMultipleSelection = NO;
+    [host presentViewController:p animated:YES completion:nil];
+}
+- (void)promptSubtitleURL {
+    UIViewController *host = [self subtitleHost];
+    if (!host) return;
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"ترجمة من رابط"
+                                                               message:@"أدخل رابطاً مباشراً لملف srt أو ass أو vtt."
+                                                        preferredStyle:UIAlertControllerStyleAlert];
+    [ac addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+        tf.placeholder = @"https://example.com/subtitle.srt";
+        tf.keyboardType = UIKeyboardTypeURL;
+        tf.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        tf.autocorrectionType = UITextAutocorrectionTypeNo;
+    }];
+    __weak LSController *ws = self;
+    __weak UIAlertController *wac = ac;
+    [ac addAction:[UIAlertAction actionWithTitle:@"تحميل" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        NSString *url = [wac.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        NSURL *u = [NSURL URLWithString:url ?: @""];
+        NSString *scheme = u.scheme.lowercaseString;
+        if (!u || !([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"])) {
+            [ws showSubtitleAlert:@"رابط غير صالح" message:@"استخدم رابطاً يبدأ بـ http أو https."];
+            return;
+        }
+        [ws loadExternalSubtitle:url];
+    }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"إلغاء" style:UIAlertActionStyleCancel handler:nil]];
+    [host presentViewController:ac animated:YES completion:nil];
+}
+- (void)loadExternalSubtitle:(NSString *)pathOrURL {
+    if (!pathOrURL.length) return;
+    mpv_handle *h = self.vc ? LSHandle(self.vc) : NULL;
+    if (!h || !LSResolve() || !p_cmd) {
+        [self showSubtitleAlert:@"تعذّر تحميل الترجمة" message:@"المشغل غير متاح الآن."];
+        return;
+    }
+    NSString *source = [pathOrURL copy];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        const char *arg = source.UTF8String;
+        if (!arg) return;
+        const char *args[] = {"sub-add", arg, "select", NULL};
+        int r = p_cmd(h, args);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (r < 0) {
+                [self showSubtitleAlert:@"تعذّر تحميل الترجمة" message:@"تأكد من صيغة الملف أو صحة الرابط."];
+                return;
+            }
+            self.curRange = NSMakeRange(NSNotFound, 0);
+            [self render];
+            LSHaptic(UIImpactFeedbackStyleLight);
+        });
+    });
+}
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    NSURL *u = urls.firstObject;
+    if (!u) return;
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *dir = [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject
+                     stringByAppendingPathComponent:@"LangSubs"];
+    [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *ext = u.pathExtension.length ? u.pathExtension : @"srt";
+    NSString *dst = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"external-%lld.%@",
+                     (long long)([NSDate date].timeIntervalSince1970 * 1000), ext]];
+    [fm removeItemAtPath:dst error:nil];
+    if ([fm copyItemAtURL:u toURL:[NSURL fileURLWithPath:dst] error:nil]) [self loadExternalSubtitle:dst];
+    else [self loadExternalSubtitle:u.path];
+}
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {}
+
 - (void)detach {
     [self.timer invalidate]; self.timer = nil;
     UIViewController *vc = self.vc;
@@ -2153,6 +2273,7 @@ static NSRegularExpression *WordRE, *ArabicRE;
     self.displayLine = nil;
     [self.overlay removeFromSuperview];
     self.overlay = nil; self.tv = nil; self.card = nil; self.gear = nil;
+    self.subBtn = nil;
     self.navPrev = nil; self.navNext = nil; self.navSpeak = nil; self.vc = nil;
 }
 
@@ -2220,6 +2341,8 @@ static NSRegularExpression *WordRE, *ArabicRE;
 
     self.gear.frame = CGRectMake(si.left + 14, b.size.height - si.bottom - 62, 40, 40);
     self.gear.hidden = !self.card.hidden || !LSB(@"LSShowGear", YES);
+    self.subBtn.frame = CGRectMake(si.left + 14 + 40 + 10, b.size.height - si.bottom - 62, 40, 40);
+    self.subBtn.hidden = !self.card.hidden || !LSB(@"LSEnabled", YES);
     [self updateNav];
 }
 

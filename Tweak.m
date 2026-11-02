@@ -1,4 +1,4 @@
-// LangSubsTap 3.1 — learn languages from any subtitle.
+// LangSubsTap 3.8 — learn languages from any subtitle.
 // Tap a word inside the player, hear it, keep it, and review it later.
 // Plain Objective-C runtime, no Substrate. Inject the dylib into the Nuvio IPA.
 //
@@ -26,7 +26,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <NaturalLanguage/NaturalLanguage.h>
 
-static NSString *const LSVersion = @"3.7";
+static NSString *const LSVersion = @"3.8";
 
 // =====================================================================
 #pragma mark - libmpv access
@@ -153,7 +153,7 @@ static NSString *LSDetectVoiceLang(NSString *text) {
     return @"en-US";
 }
 
-@interface LSSpeech : NSObject
+@interface LSSpeech : NSObject <AVSpeechSynthesizerDelegate>
 @property (nonatomic, strong) AVSpeechSynthesizer *synth;
 + (instancetype)shared;
 - (void)speak:(NSString *)text language:(NSString *)lang;
@@ -162,27 +162,69 @@ static NSString *LSDetectVoiceLang(NSString *text) {
 - (void)speakTranslation:(NSString *)text;
 - (void)stop;
 @end
-@implementation LSSpeech
+@implementation LSSpeech {
+    NSString *_prevCategory;
+    AVAudioSessionMode _prevMode;
+    AVAudioSessionCategoryOptions _prevOptions;
+    AVSpeechUtterance *_current;
+}
 + (instancetype)shared {
     static LSSpeech *s; static dispatch_once_t o;
-    dispatch_once(&o, ^{ s = [LSSpeech new]; s.synth = [AVSpeechSynthesizer new]; });
+    dispatch_once(&o, ^{ s = [LSSpeech new]; s.synth = [AVSpeechSynthesizer new]; s.synth.delegate = s; });
     return s;
+}
+- (void)activateSession {
+    AVAudioSession *s = AVAudioSession.sharedInstance;
+    if (!_prevCategory) {
+        _prevCategory = s.category;
+        _prevMode = s.mode;
+        _prevOptions = s.categoryOptions;
+    }
+    [s setCategory:AVAudioSessionCategoryPlayback
+              mode:AVAudioSessionModeSpokenAudio
+           options:AVAudioSessionCategoryOptionMixWithOthers | AVAudioSessionCategoryOptionDuckOthers
+             error:nil];
+    [s setActive:YES error:nil];
+}
+- (void)deactivateSession {
+    AVAudioSession *s = AVAudioSession.sharedInstance;
+    [s setActive:NO withOptions:AVAudioSessionOptionNotifyOthersOnDeactivation error:nil];
+    if (_prevCategory) {
+        [s setCategory:_prevCategory mode:_prevMode options:_prevOptions error:nil];
+        _prevCategory = nil;
+    }
 }
 - (void)speak:(NSString *)text language:(NSString *)lang {
     if (!text.length) return;
-    [self.synth stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
     AVSpeechUtterance *u = [AVSpeechUtterance speechUtteranceWithString:text];
     AVSpeechSynthesisVoice *v = [AVSpeechSynthesisVoice voiceWithLanguage:lang];
     if (!v) v = [AVSpeechSynthesisVoice voiceWithLanguage:@"en-US"];
     u.voice = v;
     u.rate = (float)LSF(@"LSSpeechRate", 0.47);
     u.pitchMultiplier = 1.0;
+    _current = u;
+    [self activateSession];
+    [self.synth stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
     [self.synth speakUtterance:u];
 }
 - (void)speakWord:(NSString *)word { [self speak:word language:LSDetectVoiceLang(word)]; }
 - (void)speakText:(NSString *)text { [self speak:text language:LSDetectVoiceLang(text)]; }
 - (void)speakTranslation:(NSString *)text { [self speak:text language:LSVoiceLang(LSLang())]; }
-- (void)stop { [self.synth stopSpeakingAtBoundary:AVSpeechBoundaryImmediate]; }
+- (void)stop {
+    _current = nil;
+    [self.synth stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
+    [self deactivateSession];
+}
+- (void)speechSynthesizer:(AVSpeechSynthesizer *)s didFinishSpeechUtterance:(AVSpeechUtterance *)u {
+    if (u != _current) return;
+    _current = nil;
+    if (!s.isSpeaking) [self deactivateSession];
+}
+- (void)speechSynthesizer:(AVSpeechSynthesizer *)s didCancelSpeechUtterance:(AVSpeechUtterance *)u {
+    if (u != _current) return;
+    _current = nil;
+    if (!s.isSpeaking) [self deactivateSession];
+}
 @end
 
 // =====================================================================
@@ -244,7 +286,14 @@ static void LSDictionaryLookup(NSString *word, LSDictBlock cb) {
     dispatch_once(&once, ^{ cache = [NSMutableDictionary new]; });
     NSString *key = word.lowercaseString;
     NSDictionary *c = cache[key];
-    if (c) { cb(c[@"p"], c[@"pos"], c[@"d"]); return; }
+    if (c) {
+        double failAt = [c[@"fail"] doubleValue];
+        if (failAt <= 0 || [NSDate date].timeIntervalSince1970 - failAt < 600) {
+            cb(c[@"p"], c[@"pos"], c[@"d"]);
+            return;
+        }
+        [cache removeObjectForKey:key];
+    }
     NSString *q = LSUrlEncode(key);
     NSString *u = [NSString stringWithFormat:@"https://api.dictionaryapi.dev/api/v2/entries/en/%@", q];
     LSGet(u, ^(NSData *d) {
@@ -274,6 +323,7 @@ static void LSDictionaryLookup(NSString *word, LSDictBlock cb) {
             }
         }
         if (ph || pos || def) cache[key] = @{@"p": ph ?: @"", @"pos": pos ?: @"", @"d": def ?: @""};
+        else cache[key] = @{@"fail": @([NSDate date].timeIntervalSince1970)};
         cb(ph, pos, def);
     });
 }
@@ -2251,7 +2301,8 @@ static NSRegularExpression *WordRE, *ArabicRE;
     UITextView *tv = self.tv;
     if (!tv || !tv.text.length) return;
     CGPoint p = [g locationInView:tv];
-    p.x -= tv.textContainerInset.left; p.y -= tv.textContainerInset.top;
+    p.x -= tv.textContainerInset.left + tv.textContainer.lineFragmentPadding;
+    p.y -= tv.textContainerInset.top;
     NSUInteger idx = [tv.layoutManager characterIndexForPoint:p inTextContainer:tv.textContainer fractionOfDistanceBetweenInsertionPoints:NULL];
     NSString *t = tv.text;
     for (NSTextCheckingResult *m in [WordRE matchesInString:t options:0 range:NSMakeRange(0, t.length)]) {
@@ -2598,6 +2649,9 @@ static void LSBootstrap(void) {
 __attribute__((constructor)) static void LSInit(void) {
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *x) {
         LSBootstrap();
+    }];
+    [[NSNotificationCenter defaultCenter] addObserverForName:UISceneDidActivateNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *x) {
+        LSInstallGesture();
     }];
     // Fire even if the dylib is injected after the app became active.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ LSBootstrap(); });

@@ -2148,9 +2148,14 @@ static NSRegularExpression *WordRE, *ArabicRE;
     CGFloat tvBottom = cardShown ? (cy - gap) : (areaBottom - LSF(@"LSBottom", 70));
     CGFloat tvY = MAX(minTvY, tvBottom - ts.height);
     BOOL showCtl = a.length && cardShown && LSB(@"LSEnabled", YES);
+    CGFloat tvX = MAX(8, (b.size.width - ts.width) / 2);
+    if (showCtl) {
+        CGFloat groupW = 28 + 6 + ts.width + 6 + 30 + 4 + 28;
+        CGFloat groupX = MAX(8, MIN((b.size.width - groupW) / 2, b.size.width - 8 - groupW));
+        tvX = groupX + 28 + 6;
+    }
     if (a.length) {
         self.tv.hidden = NO;
-        CGFloat tvX = MAX(8, (b.size.width - ts.width) / 2);
         self.tv.frame = CGRectMake(tvX, tvY, ts.width, ts.height);
     }
     self.navPrev.hidden = !showCtl;
@@ -2158,11 +2163,9 @@ static NSRegularExpression *WordRE, *ArabicRE;
     self.navSpeak.hidden = !showCtl;
     if (showCtl) {
         CGFloat midY = CGRectGetMidY(self.tv.frame);
-        CGFloat left = MAX(0, CGRectGetMinX(self.tv.frame) - 28);
-        CGFloat right = MIN(CGRectGetMaxX(self.tv.frame), b.size.width - 30);
-        self.navPrev.frame = CGRectMake(left, midY - 14, 28, 28);
-        self.navSpeak.frame = CGRectMake(right, midY - 30, 30, 30);
-        self.navNext.frame = CGRectMake(MIN(right + 1, b.size.width - 28), midY - 30 + 32, 28, 28);
+        self.navPrev.frame = CGRectMake(tvX - 6 - 28, midY - 14, 28, 28);
+        self.navSpeak.frame = CGRectMake(CGRectGetMaxX(self.tv.frame) + 6, midY - 15, 30, 30);
+        self.navNext.frame = CGRectMake(CGRectGetMaxX(self.navSpeak.frame) + 4, midY - 14, 28, 28);
     }
 
     self.gear.frame = CGRectMake(si.left + 14, b.size.height - si.bottom - 62, 40, 40);
@@ -2172,7 +2175,9 @@ static NSRegularExpression *WordRE, *ArabicRE;
 
 - (CGFloat)subtitleTextWidthForCard:(BOOL)cardShown {
     CGFloat w = self.overlay ? self.overlay.bounds.size.width : UIScreen.mainScreen.bounds.size.width;
-    return MAX(80, (w * 0.90 - 24) - 20);
+    CGFloat maxTvW = cardShown ? (w - (6 + 28) - (6 + 30 + 4 + 28) - 16)
+                              : (w * 0.90 - 24);
+    return MAX(80, MAX(120, maxTvW) - 20);
 }
 
 - (NSAttributedString *)subtitleText:(NSString *)t font:(CGFloat)fs {

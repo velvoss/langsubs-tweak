@@ -188,7 +188,7 @@ static NSString *LSDetectVoiceLang(NSString *text) {
 }
 - (void)deactivateSession {
     AVAudioSession *s = AVAudioSession.sharedInstance;
-    [s setActive:NO withOptions:AVAudioSessionOptionNotifyOthersOnDeactivation error:nil];
+    [s setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:nil];
     if (_prevCategory) {
         [s setCategory:_prevCategory mode:_prevMode options:_prevOptions error:nil];
         _prevCategory = nil;
